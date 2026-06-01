@@ -3,3 +3,28 @@ vs_enterprise.exe --layout C:\VS2022_Offline --add Microsoft.VisualStudio.Worklo
 
 vs_enterprise.exe --noweb --add Microsoft.VisualStudio.Workload.ManagedDesktop --add Microsoft.Net.ComponentGroup.TargetingPacks.Common --add Microsoft.Net.Component.4.8.1.SDK --add Microsoft.Net.Component.4.8.1.TargetingPack --add Microsoft.Net.Component.4.8.SDK --add Microsoft.Net.Component.4.8.TargetingPack --add Microsoft.Net.Component.4.7.2.SDK --add Microsoft.Net.Component.4.7.2.TargetingPack --add Microsoft.Net.Component.4.7.1.SDK --add Microsoft.Net.Component.4.7.1.TargetingPack --add Microsoft.Net.Component.4.6.2.SDK --add Microsoft.Net.Component.4.6.2.TargetingPack --includeRecommended
 vs_enterprise.exe --noweb --noWeb --quiet --wait --norestart --add Microsoft.VisualStudio.Workload.ManagedDesktop --add Microsoft.Net.ComponentGroup.TargetingPacks.Common --add Microsoft.Net.Component.4.8.1.SDK --add Microsoft.Net.Component.4.8.1.TargetingPack --add Microsoft.Net.Component.4.8.SDK --add Microsoft.Net.Component.4.8.TargetingPack --add Microsoft.Net.Component.4.7.2.SDK --add Microsoft.Net.Component.4.7.2.TargetingPack --add Microsoft.Net.Component.4.7.1.SDK --add Microsoft.Net.Component.4.7.1.TargetingPack --add Microsoft.Net.Component.4.6.2.SDK --add Microsoft.Net.Component.4.6.2.TargetingPack --includeRecommended
+
+taskkill /f /im vs_setup_bootstrapper.exe
+taskkill /f /im vs_installer.exe
+taskkill /f /im setup.exe
+taskkill /f /im ServiceHub.Host.netfx.x86.exe
+taskkill /f /im ServiceHub.Host.netfx.x64.exe
+
+rd /s /q "C:\ProgramData\Microsoft\VisualStudio\Packages"
+rd /s /q "C:\ProgramData\Microsoft\VisualStudio\Packages_Instances"
+rd /s /q "C:\ProgramData\Microsoft\VisualStudio\Packages_Bootstrapper"
+rd /s /q "C:\Program Files (x86)\Microsoft Visual Studio\Installer"
+
+rd /s /q "%TEMP%\3"
+rd /s /q "%TEMP%\vs_bootstrapper_d15"
+del /q "%TEMP%\dd_*.log"
+
+cd /d C:\VS2022_Offline\Certificates
+
+certutil -addstore -f Root manifestRootCertificate.cer
+certutil -addstore -f Root manifestCounterSignRootCertificate.cer
+certutil -addstore -f Root vs_installer_opc.RootCertificate.cer
+
+cd /d C:\VS2022_Offline
+
+vs_setup.exe --noweb --passive --norestart
