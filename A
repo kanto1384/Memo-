@@ -1,3 +1,1 @@
-cd /d "%USERPROFILE%\Downloads"
-
-vs_enterprise.exe --layout "D:\VS2022_OFFLINE" --lang ko-KR --add Microsoft.VisualStudio.Workload.ManagedDesktop --add Microsoft.VisualStudio.Workload.NetWeb --add Microsoft.Net.Component.4.6.TargetingPack --add Microsoft.Net.Component.4.6.SDK --add Microsoft.Net.Component.4.7.2.TargetingPack --add Microsoft.Net.Component.4.7.2.SDK --add Microsoft.Net.Component.4.8.TargetingPack --add Microsoft.Net.Component.4.8.SDK --includeRecommended --passive --wait
+vs_enterprise.exe --layout C:\VS2022_OFFLINE --lang ko-KR --add Microsoft.VisualStudio.Workload.ManagedDesktop --add Microsoft.VisualStudio.Workload.NetWeb --add Microsoft.Net.Component.4.6.TargetingPack --add Microsoft.Net.Component.4.6.SDK --add Microsoft.Net.Component.4.7.2.TargetingPack --add Microsoft.Net.Component.4.7.2.SDK --add Microsoft.Net.Component.4.8.TargetingPack --add Microsoft.Net.Component.4.8.SDK --includeRecommended --passive --wait
