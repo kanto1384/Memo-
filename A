@@ -1,1 +1,2 @@
 vs_enterprise.exe --layout C:\VS2022_Offline --add Microsoft.VisualStudio.Workload.ManagedDesktop --includeRecommended --lang ko-KR
+vs_enterprise.exe --noweb --add Microsoft.VisualStudio.Workload.ManagedDesktop --includeRecommended
