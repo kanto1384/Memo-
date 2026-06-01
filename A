@@ -1,0 +1,26 @@
+vs_enterprise.exe --layout D:\VS2022_Enterprise_Offline --lang ko-KR ^
+--add Microsoft.VisualStudio.Workload.ManagedDesktop ^
+--add Microsoft.VisualStudio.Workload.NetWeb ^
+--add Microsoft.VisualStudio.Component.Roslyn.Compiler ^
+--add Microsoft.VisualStudio.Component.TextTemplating ^
+--add Microsoft.VisualStudio.Component.ManagedDesktop.Core ^
+--add Microsoft.VisualStudio.Component.ManagedDesktop.Prerequisites ^
+--add Microsoft.VisualStudio.Component.DotNetModelBuilder ^
+--add Microsoft.VisualStudio.Component.NuGet ^
+--add Microsoft.VisualStudio.Component.SQL.SSDT ^
+--add Microsoft.VisualStudio.Component.Debugger.JustInTime ^
+--add Microsoft.Net.Component.4.6.TargetingPack ^
+--add Microsoft.Net.Component.4.6.SDK ^
+--add Microsoft.Net.Component.4.6.1.TargetingPack ^
+--add Microsoft.Net.Component.4.6.1.SDK ^
+--add Microsoft.Net.Component.4.6.2.TargetingPack ^
+--add Microsoft.Net.Component.4.6.2.SDK ^
+--add Microsoft.Net.Component.4.7.TargetingPack ^
+--add Microsoft.Net.Component.4.7.SDK ^
+--add Microsoft.Net.Component.4.7.1.TargetingPack ^
+--add Microsoft.Net.Component.4.7.1.SDK ^
+--add Microsoft.Net.Component.4.7.2.TargetingPack ^
+--add Microsoft.Net.Component.4.7.2.SDK ^
+--add Microsoft.Net.Component.4.8.TargetingPack ^
+--add Microsoft.Net.Component.4.8.SDK ^
+--includeRecommended
