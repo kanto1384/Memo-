@@ -1,3 +1,2 @@
-
-vs_enterprise.exe --noweb --add Microsoft.VisualStudio.Workload.ManagedDesktop --includeRecommended
 vs_enterprise.exe --layout C:\VS2022_Offline --add Microsoft.VisualStudio.Workload.ManagedDesktop --add Microsoft.Net.Component.4.8.TargetingPack --add Microsoft.Net.Component.4.7.2.TargetingPack --add Microsoft.Net.ComponentGroup.TargetingPacks.Common --includeRecommended --lang ko-KR
+vs_enterprise.exe --noweb --add Microsoft.VisualStudio.Workload.ManagedDesktop --add Microsoft.Net.Component.4.8.TargetingPack --add Microsoft.Net.Component.4.7.2.TargetingPack --add Microsoft.Net.ComponentGroup.TargetingPacks.Common --includeRecommended
