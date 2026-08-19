@@ -1,30 +1,273 @@
+private async Task RegisterAutoLoginScriptAsync()
+{
+    if (_web.CoreWebView2 == null)
+        return;
 
-vs_enterprise.exe --layout C:\VS2022_Offline --add Microsoft.VisualStudio.Workload.ManagedDesktop --add Microsoft.Net.ComponentGroup.TargetingPacks.Common --add Microsoft.Net.Component.4.8.1.SDK --add Microsoft.Net.Component.4.8.1.TargetingPack --add Microsoft.Net.Component.4.8.SDK --add Microsoft.Net.Component.4.8.TargetingPack --add Microsoft.Net.Component.4.7.2.SDK --add Microsoft.Net.Component.4.7.2.TargetingPack --add Microsoft.Net.Component.4.7.1.SDK --add Microsoft.Net.Component.4.7.1.TargetingPack --add Microsoft.Net.Component.4.6.2.SDK --add Microsoft.Net.Component.4.6.2.TargetingPack --includeRecommended --lang ko-KR
+    // 잠금 해제에는 PW만 필요함
+    if (string.IsNullOrWhiteSpace(_loginPwFromJson))
+        return;
 
-vs_enterprise.exe --noweb --add Microsoft.VisualStudio.Workload.ManagedDesktop --add Microsoft.Net.ComponentGroup.TargetingPacks.Common --add Microsoft.Net.Component.4.8.1.SDK --add Microsoft.Net.Component.4.8.1.TargetingPack --add Microsoft.Net.Component.4.8.SDK --add Microsoft.Net.Component.4.8.TargetingPack --add Microsoft.Net.Component.4.7.2.SDK --add Microsoft.Net.Component.4.7.2.TargetingPack --add Microsoft.Net.Component.4.7.1.SDK --add Microsoft.Net.Component.4.7.1.TargetingPack --add Microsoft.Net.Component.4.6.2.SDK --add Microsoft.Net.Component.4.6.2.TargetingPack --includeRecommended
-vs_enterprise.exe --noweb --noWeb --quiet --wait --norestart --add Microsoft.VisualStudio.Workload.ManagedDesktop --add Microsoft.Net.ComponentGroup.TargetingPacks.Common --add Microsoft.Net.Component.4.8.1.SDK --add Microsoft.Net.Component.4.8.1.TargetingPack --add Microsoft.Net.Component.4.8.SDK --add Microsoft.Net.Component.4.8.TargetingPack --add Microsoft.Net.Component.4.7.2.SDK --add Microsoft.Net.Component.4.7.2.TargetingPack --add Microsoft.Net.Component.4.7.1.SDK --add Microsoft.Net.Component.4.7.1.TargetingPack --add Microsoft.Net.Component.4.6.2.SDK --add Microsoft.Net.Component.4.6.2.TargetingPack --includeRecommended
+    var idJson = JsonSerializer.Serialize(_loginIdFromJson ?? "");
+    var pwJson = JsonSerializer.Serialize(_loginPwFromJson ?? "");
 
-taskkill /f /im vs_setup_bootstrapper.exe
-taskkill /f /im vs_installer.exe
-taskkill /f /im setup.exe
-taskkill /f /im ServiceHub.Host.netfx.x86.exe
-taskkill /f /im ServiceHub.Host.netfx.x64.exe
+    var js = $@"
+(() => {{
+  const ID = {idJson};
+  const PW = {pwJson};
 
-rd /s /q "C:\ProgramData\Microsoft\VisualStudio\Packages"
-rd /s /q "C:\ProgramData\Microsoft\VisualStudio\Packages_Instances"
-rd /s /q "C:\ProgramData\Microsoft\VisualStudio\Packages_Bootstrapper"
-rd /s /q "C:\Program Files (x86)\Microsoft Visual Studio\Installer"
+  // 한 문서에 중복 등록 방지
+  if (window.__gateOneAutoLoginInstalled)
+    return;
 
-rd /s /q "%TEMP%\3"
-rd /s /q "%TEMP%\vs_bootstrapper_d15"
-del /q "%TEMP%\dd_*.log"
+  window.__gateOneAutoLoginInstalled = true;
 
-cd /d C:\VS2022_Offline\Certificates
+  const inputSetter =
+    Object.getOwnPropertyDescriptor(
+      HTMLInputElement.prototype,
+      'value'
+    )?.set;
 
-certutil -addstore -f Root manifestRootCertificate.cer
-certutil -addstore -f Root manifestCounterSignRootCertificate.cer
-certutil -addstore -f Root vs_installer_opc.RootCertificate.cer
+  function setInput(element, value) {{
+    if (!element)
+      return false;
 
-cd /d C:\VS2022_Offline
+    try {{
+      element.focus();
 
-vs_setup.exe --noweb --passive --norestart
+      if (inputSetter)
+        inputSetter.call(element, value);
+      else
+        element.value = value;
+
+      element.dispatchEvent(
+        new Event('input', {{ bubbles: true }})
+      );
+
+      element.dispatchEvent(
+        new Event('change', {{ bubbles: true }})
+      );
+
+      element.dispatchEvent(
+        new KeyboardEvent('keyup', {{ bubbles: true }})
+      );
+
+      element.blur();
+
+      return element.value === value;
+    }}
+    catch {{
+      return false;
+    }}
+  }}
+
+  function isVisible(element) {{
+    if (!element)
+      return false;
+
+    if (!document.documentElement.contains(element))
+      return false;
+
+    const style = window.getComputedStyle(element);
+    const rect = element.getBoundingClientRect();
+
+    return (
+      style.display !== 'none' &&
+      style.visibility !== 'hidden' &&
+      rect.width > 0 &&
+      rect.height > 0
+    );
+  }}
+
+  /*
+   * 기존 로그인 화면 자동입력
+   */
+  function tryFillLogin() {{
+    if (!ID || !PW)
+      return false;
+
+    const idElement = document.querySelector(
+      'input#USERID.input_txt, ' +
+      'input#USERID, ' +
+      'input[name=""USERID""]'
+    );
+
+    const pwElement = document.querySelector(
+      'input#PASSWD.input_txt, ' +
+      'input#PASSWD, ' +
+      'input[name=""PASSWD""]'
+    );
+
+    if (!idElement || !pwElement)
+      return false;
+
+    const idResult = setInput(idElement, ID);
+    const pwResult = setInput(pwElement, PW);
+
+    return idResult && pwResult;
+  }}
+
+  /*
+   * 잠금 화면 자동해제
+   *
+   * ready     : 자동해제 가능
+   * scheduled : 1~3초 클릭 대기
+   * attempted : 현재 잠금 화면에서 이미 한 번 실행함
+   */
+  let lockState = 'ready';
+  let unlockTimer = null;
+  let lockMissingSince = 0;
+
+  function getLockInput() {{
+    return document.querySelector(
+      'input#lock_passwd.txt_box5, ' +
+      'input#lock_passwd'
+    );
+  }}
+
+  function getLockButton() {{
+    return document.querySelector(
+      'a[onclick*=""lock_screen_login""][title=""확인""], ' +
+      'a[onclick*=""lock_screen_login""]'
+    );
+  }}
+
+  function scheduleUnlock() {{
+    if (lockState !== 'ready')
+      return;
+
+    const lockInput = getLockInput();
+    const lockButton = getLockButton();
+
+    if (!isVisible(lockInput) || !isVisible(lockButton))
+      return;
+
+    // 먼저 실행 상태를 변경하여 중복 예약 방지
+    lockState = 'scheduled';
+
+    if (!setInput(lockInput, PW)) {{
+      lockState = 'attempted';
+      return;
+    }}
+
+    // 1~3초 랜덤 대기
+    const delay = 1000 + Math.floor(Math.random() * 2001);
+
+    unlockTimer = window.setTimeout(() => {{
+      unlockTimer = null;
+
+      const currentInput = getLockInput();
+      const currentButton = getLockButton();
+
+      // 대기 중 잠금 화면이 사라졌으면 클릭 취소
+      if (!isVisible(currentInput)) {{
+        lockState = 'attempted';
+        return;
+      }}
+
+      // 확인 버튼이 사라졌으면 클릭 취소
+      if (!isVisible(currentButton)) {{
+        lockState = 'attempted';
+        return;
+      }}
+
+      // 입력값이 변경됐으면 클릭 취소
+      if (currentInput.value !== PW) {{
+        lockState = 'attempted';
+        return;
+      }}
+
+      // 클릭 전에 실행완료 상태로 변경
+      // DOM이 바뀌어도 같은 잠금 화면에서 재실행하지 않음
+      lockState = 'attempted';
+
+      try {{
+        currentButton.click();
+      }}
+      catch {{
+        // 클릭 실패 시에도 자동 반복하지 않음
+      }}
+    }}, delay);
+  }}
+
+  function checkLockScreen() {{
+    const lockInput = getLockInput();
+
+    if (isVisible(lockInput)) {{
+      lockMissingSince = 0;
+
+      if (lockState === 'ready')
+        scheduleUnlock();
+
+      return;
+    }}
+
+    // 클릭 대기 중 잠금 화면이 사라졌으면 타이머 취소
+    if (unlockTimer !== null) {{
+      window.clearTimeout(unlockTimer);
+      unlockTimer = null;
+    }}
+
+    /*
+     * DOM이 잠깐 재생성되는 것을 잠금 해제로 판단하지 않도록
+     * 2초 이상 사라져 있어야 다음 잠금 준비
+     */
+    if (lockMissingSince === 0) {{
+      lockMissingSince = Date.now();
+      return;
+    }}
+
+    if (
+      Date.now() - lockMissingSince >= 2000 &&
+      lockState !== 'ready'
+    ) {{
+      lockState = 'ready';
+    }}
+  }}
+
+  /*
+   * 기존 로그인 자동입력
+   * 250ms × 40회 = 최대 10초
+   */
+  let loginTryCount = 0;
+
+  const loginTimer = window.setInterval(() => {{
+    loginTryCount++;
+
+    if (tryFillLogin() || loginTryCount >= 40)
+      window.clearInterval(loginTimer);
+  }}, 250);
+
+  /*
+   * 잠금 화면은 나중에 표시되므로 계속 감시
+   */
+  const lockObserver = new MutationObserver(() => {{
+    checkLockScreen();
+  }});
+
+  lockObserver.observe(document.documentElement, {{
+    childList: true,
+    subtree: true,
+    attributes: true,
+    attributeFilter: [
+      'style',
+      'class',
+      'hidden'
+    ]
+  }});
+
+  // style 변경을 놓치는 경우 대비
+  window.setInterval(() => {{
+    checkLockScreen();
+  }}, 500);
+
+  // 실행 시 이미 잠금 화면이 떠 있는 경우
+  checkLockScreen();
+}})();";
+
+    // 앞으로 열릴 문서에 자동 등록
+    await _web.CoreWebView2
+        .AddScriptToExecuteOnDocumentCreatedAsync(js);
+
+    // 현재 이미 열려 있는 문서에도 실행
+    await _web.CoreWebView2.ExecuteScriptAsync(js);
+}
