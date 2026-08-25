@@ -1,326 +1,178 @@
-private async Task RegisterAutoLoginScriptAsync()
-{
-    if (_web.CoreWebView2 == null)
-        return;
+28s 동안 처리함
 
-    if (string.IsNullOrWhiteSpace(_loginPwFromJson))
-        return;
+Ubuntu 바탕화면까지 들어온 상태라면 Ctrl + Alt + T로 터미널을 열고 순서대로 진행해.
 
-    var idJson = JsonSerializer.Serialize(_loginIdFromJson ?? "");
-    var pwJson = JsonSerializer.Serialize(_loginPwFromJson ?? "");
+1. 기본 설정 및 업데이트
 
-    var js = $@"
-(() => {{
-  const ID = {idJson};
-  const PW = {pwJson};
-  const SCRIPT_VERSION = 'lock-v4';
+sudo timedatectl set-timezone Asia/Seoul
+sudo timedatectl set-ntp true
+sudo apt update
+sudo apt full-upgrade -y
 
-  if (window.__gateOneAutomationVersion === SCRIPT_VERSION)
-    return;
+완료 후 재부팅:
 
-  const inputSetter =
-    Object.getOwnPropertyDescriptor(
-      HTMLInputElement.prototype,
-      'value'
-    )?.set;
+sudo reboot
 
-  function setInput(element, value) {{
-    if (!element)
-      return false;
+2. 서버 필수 프로그램 설치
 
-    try {{
-      element.focus();
+재부팅 후 터미널을 다시 열고:
 
-      if (inputSetter)
-        inputSetter.call(element, value);
-      else
-        element.value = value;
+sudo apt install -y openssh-server curl tar lib32gcc-s1 lib32stdc++6 ufw
 
-      element.dispatchEvent(
-        new Event('input', {{
-          bubbles: true
-        }})
-      );
+SSH 자동 실행:
 
-      element.dispatchEvent(
-        new Event('change', {{
-          bubbles: true
-        }})
-      );
+sudo systemctl enable --now ssh
 
-      element.dispatchEvent(
-        new KeyboardEvent('keydown', {{
-          bubbles: true
-        }})
-      );
+IP 확인:
 
-      element.dispatchEvent(
-        new KeyboardEvent('keyup', {{
-          bubbles: true
-        }})
-      );
+hostname -I
 
-      element.blur();
+192.168.x.x 주소를 적어둔다.
 
-      return element.value === value;
-    }}
-    catch {{
-      return false;
-    }}
-  }}
+3. 새티스팩토리 전용 계정 생성
 
-  function isVisible(element) {{
-    if (!element)
-      return false;
+sudo useradd --create-home --shell /bin/bash steam
 
-    if (!document.contains(element))
-      return false;
+폴더 생성:
 
-    try {{
-      const style = window.getComputedStyle(element);
-      const rect = element.getBoundingClientRect();
+sudo -u steam mkdir -p /home/steam/steamcmd
+sudo -u steam mkdir -p /home/steam/satisfactory
 
-      return (
-        style.display !== 'none' &&
-        style.visibility !== 'hidden' &&
-        style.opacity !== '0' &&
-        rect.width > 0 &&
-        rect.height > 0
-      );
-    }}
-    catch {{
-      return false;
-    }}
-  }}
+4. SteamCMD 설치
 
-  /*
-   * 최초 로그인 화면 자동 입력
-   */
-  function tryFillLogin() {{
-    if (!ID || !PW)
-      return false;
+sudo -u steam bash -c 'cd /home/steam/steamcmd && curl -fsSL https://steamcdn-a.akamaihd.net/client/installer/steamcmd_linux.tar.gz | tar -xz'
 
-    const idElement = document.querySelector(
-      'input#USERID.input_txt, ' +
-      'input#USERID, ' +
-      'input[name=""USERID""]'
-    );
+확인:
 
-    const passwordElement = document.querySelector(
-      'input#PASSWD.input_txt, ' +
-      'input#PASSWD, ' +
-      'input[name=""PASSWD""]'
-    );
+ls -l /home/steam/steamcmd/steamcmd.sh
 
-    if (!idElement || !passwordElement)
-      return false;
+파일이 표시되면 정상이다.
 
-    const idResult = setInput(idElement, ID);
-    const passwordResult = setInput(passwordElement, PW);
+5. 새티스팩토리 서버 설치
 
-    return idResult && passwordResult;
-  }}
+sudo -u steam /home/steam/steamcmd/steamcmd.sh \
+  +force_install_dir /home/steam/satisfactory \
+  +login anonymous \
+  +app_update 1690800 validate \
+  +quit
 
-  /*
-   * ready:
-   *   새로운 잠금 화면 처리 가능
-   *
-   * scheduled:
-   *   비밀번호 입력 후 확인 클릭 대기
-   *
-   * attempted:
-   *   현재 표시된 잠금 화면에서 이미 한 번 클릭함
-   */
-  let lockState = 'ready';
-  let unlockTimer = null;
+다운로드가 끝나면 확인:
 
-  /*
-   * 직전 확인 버튼 클릭 시간.
-   * 클릭 직후 발생하는 DOM 변화를 구분하는 데 사용.
-   */
-  let lastUnlockClickTime = 0;
+ls -l /home/steam/satisfactory/FactoryServer.sh
 
-  function getLockInput() {{
-    return document.querySelector(
-      'input#lock_passwd.txt_box5, ' +
-      'input#lock_passwd, ' +
-      'input[name=""lock_passwd""]'
-    );
-  }}
+6. 자동 실행 서비스 등록
 
-  function getLockButton() {{
-    return document.querySelector(
-      'a[onclick*=""lock_screen_login""][title=""확인""], ' +
-      'a[onclick*=""lock_screen_login""]'
-    );
-  }}
+sudo nano /etc/systemd/system/satisfactory.service
 
-  function scheduleUnlock() {{
-    if (lockState !== 'ready')
-      return false;
+아래 내용을 붙여넣는다.
 
-    if (!PW)
-      return false;
+[Unit]
+Description=Satisfactory Dedicated Server
+Wants=network-online.target
+After=network-online.target
 
-    const lockInput = getLockInput();
-    const lockButton = getLockButton();
+[Service]
+Type=simple
+User=steam
+Group=steam
+Environment=HOME=/home/steam
+WorkingDirectory=/home/steam/satisfactory
 
-    if (!isVisible(lockInput))
-      return false;
+ExecStartPre=/home/steam/steamcmd/steamcmd.sh +force_install_dir /home/steam/satisfactory +login anonymous +app_update 1690800 +quit
+ExecStart=/home/steam/satisfactory/FactoryServer.sh -unattended
 
-    if (!isVisible(lockButton))
-      return false;
+Restart=on-failure
+RestartSec=10
+KillSignal=SIGINT
+TimeoutStopSec=120
+LimitNOFILE=1048576
 
-    /*
-     * 먼저 상태를 변경한다.
-     * 비밀번호 입력 이벤트로 감시기가 실행돼도
-     * 중복 예약되지 않는다.
-     */
-    lockState = 'scheduled';
+StandardOutput=journal
+StandardError=journal
 
-    if (!setInput(lockInput, PW)) {{
-      lockState = 'attempted';
-      return false;
-    }}
+[Install]
+WantedBy=multi-user.target
 
-    const delay =
-      1000 + Math.floor(Math.random() * 2001);
+저장:
 
-    unlockTimer = window.setTimeout(() => {{
-      unlockTimer = null;
+Ctrl + O
+Enter
+Ctrl + X
 
-      const currentInput = getLockInput();
-      const currentButton = getLockButton();
+등록하고 실행:
 
-      if (!isVisible(currentInput)) {{
-        lockState = 'ready';
-        return;
-      }}
+sudo systemctl daemon-reload
+sudo systemctl enable --now satisfactory
 
-      if (!isVisible(currentButton)) {{
-        lockState = 'attempted';
-        return;
-      }}
+상태 확인:
 
-      /*
-       * 사용자가 대기 중 직접 값을 변경했다면
-       * 자동 클릭하지 않는다.
-       */
-      if (currentInput.value !== PW) {{
-        lockState = 'attempted';
-        return;
-      }}
+systemctl status satisfactory --no-pager
 
-      lockState = 'attempted';
-      lastUnlockClickTime = Date.now();
+active (running)이면 정상이다.
 
-      try {{
-        currentButton.click();
-      }}
-      catch {{
-        // 실패해도 현재 화면에서 반복하지 않음
-      }}
-    }}, delay);
+7. 방화벽 설정
 
-    return true;
-  }}
+sudo ufw allow OpenSSH
+sudo ufw allow 7777/tcp
+sudo ufw allow 7777/udp
+sudo ufw allow 8888/tcp
+sudo ufw enable
 
-  function checkLockScreen() {{
-    const lockInput = getLockInput();
-    const lockVisible = isVisible(lockInput);
+확인:
 
-    /*
-     * 잠금 화면이 보이지 않는 경우
-     */
-    if (!lockVisible) {{
-      if (unlockTimer !== null) {{
-        window.clearTimeout(unlockTimer);
-        unlockTimer = null;
-      }}
+sudo ufw status
 
-      /*
-       * 이전 잠금 화면이 사라졌으므로
-       * 다음 잠금 화면을 즉시 처리할 수 있도록 초기화.
-       *
-       * 기존의 '3초 이상 사라져야 초기화' 조건을 제거함.
-       */
-      lockState = 'ready';
-      return;
-    }}
+8. 서버 로그 확인
 
-    /*
-     * 잠금 화면이 보이는 경우.
-     *
-     * attempted 상태라면 같은 화면이므로 재실행하지 않는다.
-     * ready 상태일 때만 새 잠금 화면으로 판단한다.
-     */
-    if (lockState === 'ready')
-      scheduleUnlock();
-  }}
+journalctl -u satisfactory -f
 
-  /*
-   * 최초 로그인 자동입력
-   * 최대 10초
-   */
-  let loginTryCount = 0;
+로그 화면을 빠져나올 때:
 
-  const loginTimer = window.setInterval(() => {{
-    loginTryCount++;
+Ctrl + C
 
-    if (
-      tryFillLogin() ||
-      loginTryCount >= 40
-    ) {{
-      window.clearInterval(loginTimer);
-    }}
-  }}, 250);
+포트 확인:
 
-  /*
-   * 잠금 팝업의 추가/삭제뿐 아니라
-   * display, class 변경도 즉시 감지한다.
-   */
-  const lockObserver = new MutationObserver(() => {{
-    checkLockScreen();
-  }});
+sudo ss -lntup | grep -E '7777|8888'
 
-  lockObserver.observe(document, {{
-    childList: true,
-    subtree: true,
-    attributes: true,
-    attributeFilter: [
-      'style',
-      'class',
-      'hidden'
-    ]
-  }});
+9. 게임에서 연결
 
-  /*
-   * 감지 누락 대비.
-   * 1초에 한 번 DOM만 확인하며 서버 통신 없음.
-   */
-  window.setInterval(() => {{
-    checkLockScreen();
-  }}, 1000);
+게임 PC에서 새티스팩토리를 실행한다.
 
-  window.__gateOneAutomationVersion =
-    SCRIPT_VERSION;
+서버 관리자
+→ 서버 추가
+→ Ubuntu 노트북의 192.168.x.x 입력
+→ 포트 7777
 
-  checkLockScreen();
-}})();";
+서버 소유권을 등록하고 다음을 설정한다.
 
-    // 이후 생성되는 문서에 등록
-    await _web.CoreWebView2
-        .AddScriptToExecuteOnDocumentCreatedAsync(js);
+서버 이름
 
-    // 현재 열려 있는 문서에도 적용
-    try
-    {
-        await _web.CoreWebView2
-            .ExecuteScriptAsync(js);
-    }
-    catch
-    {
-        // 현재 문서가 준비 전이면
-        // 등록된 스크립트가 다음 문서에서 실행됨
-    }
-}
+관리자 비밀번호
+
+플레이어 접속 비밀번호
+
+새 게임 생성 또는 세이브 업로드
+
+Auto Pause 끄기: 사람이 없어도 공장 가동
+
+Auto Save on Disconnect 켜기
+
+
+10. GUI 자동 실행 끄기
+
+서버 접속까지 확인한 다음 실행한다.
+
+sudo systemctl set-default multi-user.target
+sudo reboot
+
+재부팅 후 그래픽 화면 대신 로그인 터미널만 나오며, 새티스팩토리 서버는 자동 실행된다. Ubuntu Desktop 패키지는 남아 있지만 GUI가 실행되지 않아 RAM 사용량이 줄어든다.
+
+GUI를 다시 사용하려면:
+
+sudo systemctl set-default graphical.target
+sudo reboot
+
+우선 1~5단계까지 진행하고 아래 두 명령의 결과를 보내주면 설치 상태를 확인해줄게.
+
+hostname -I
+ls -l /home/steam/satisfactory/FactoryServer.sh
