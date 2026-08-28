@@ -1,286 +1,75 @@
-39s 동안 처리함
+아래 메서드 전체 추가하면 됨.
+위치는 TryParseDynamicColumnName(...) 바로 아래가 좋음.
 
-아니. OpenAI가 막은 게 아님.
-내가 줄여서 준 거고, 그게 잘못임. 네가 계속 말한 기준은 **“메서드 전체 교체로 달라”**였는데, 내가 11/12번에서 갑자기 일부 블록만 줘서 헷갈리게 만들었음.
+UpdateDynamicColumnsForSearch(), ShowFilterMenu(), ApplyMergedColumnFilters()에서 이 메서드를 호출하니까 반드시 필요함. 기존 코드에서도 이 메서드는 kvIndexByFile에서 StartIdx~EndIdx 범위의 Key 값을 찾는 역할이었음. 
 
-현재 코드 기준으로 ShowFilterMenu()는 메뉴 클릭 마지막에 ApplyFilters();만 호출하고 있어서 Var 필터 변경 시 동적 컬럼 재생성 조건이 빠져 있고, ShowFilterSearchDialog()는 ApplyFilters(rebuildDynamicColumns);까지는 있는데 확인 후 searchForm.Close();가 없음.
-
-아래처럼 11번/12번도 전체 메서드로 교체하면 됨.
-
-
----
-
-11. ShowFilterMenu(int col) 전체 교체
-
-private void ShowFilterMenu(int col)
+private string GetDynamicValueInRowRange(CombinedRow row, string key, int idx)
 {
-    // 0) DataSource 존재 가드
-    if (gridMerged.DataSource == null)
-        return;
+    if (row == null)
+        return "";
 
-    BindingSource _bs = gridMerged.DataSource as BindingSource;
+    if (string.IsNullOrWhiteSpace(key))
+        return "";
 
-    if (_bs == null)
-        return;
+    if (string.IsNullOrWhiteSpace(row.SourceFile))
+        return "";
 
-    if (_bs.DataSource == null)
-        return;
+    if (!kvIndexByFile.TryGetValue(row.SourceFile, out var fileMap) || fileMap == null)
+        return "";
 
-    // 1) 클릭한 컬럼 확인
-    if (col < 0 || col >= gridMerged.Columns.Count)
-        return;
+    int start = row.StartIdx;
+    int end = row.EndIdx;
 
-    DataGridViewColumn clickedColumn = gridMerged.Columns[col];
+    if (start < 0 && row.SuccessIdx >= 0)
+        start = row.SuccessIdx;
 
-    if (clickedColumn == null)
-        return;
+    if (end < 0 && row.SuccessIdx >= 0)
+        end = row.SuccessIdx;
 
-    string n = clickedColumn.DataPropertyName;
+    if (start < 0 || end < 0)
+        return "";
 
-    if (string.IsNullOrEmpty(n))
-        n = clickedColumn.Name;
-
-    if (string.IsNullOrEmpty(n))
-        return;
-
-    string colKey = n;
-
-    // 2) 동적 컬럼 여부 확인
-    // UpdateDynamicColumnsForSearch()에서 Tag = (key, index) 형태로 넣은 컬럼
-    (string keyName, int indexNum)? dynamicColTag = null;
-
-    if (clickedColumn.Tag is ValueTuple<string, int> tagTuple)
+    if (start > end)
     {
-        dynamicColTag = (tagTuple.Item1, tagTuple.Item2);
+        int temp = start;
+        start = end;
+        end = temp;
     }
 
-    // 3) 동적 컬럼이면 필터 키는 컬럼 Name 기준으로 사용
-    if (dynamicColTag != null)
+    // Start~End 범위 안에서 아래쪽 블록을 우선 사용.
+    // STEP_5가 STEP_3보다 아래에 있으면 STEP_5 값이 우선 표시됨.
+    foreach (var block in fileMap
+        .Where(x => x.Key >= start && x.Key <= end)
+        .OrderByDescending(x => x.Key))
     {
-        colKey = clickedColumn.Name;
-    }
+        var pairs = block.Value;
 
-    // 4) 필터 목록용 Row 확보
-    // 현재 컬럼 필터는 제외한 상태로 목록 생성
-    // 그래야 엑셀처럼 같은 컬럼에서 여러 값을 추가 선택 가능
-    List<CombinedRow> allRows = GetRowsForFilterMenu(colKey);
+        if (pairs == null)
+            continue;
 
-    if (allRows == null || allRows.Count == 0)
-        return;
+        if (!pairs.TryGetValue(key, out var byIndex) || byIndex == null)
+            continue;
 
-    // 5) 필터 목록에 표시할 값 추출
-    var vals = new List<string>();
-
-    if (dynamicColTag != null)
-    {
-        var tag = dynamicColTag.Value;
-        string keyNameVal = tag.keyName;
-        int indexNumVal = tag.indexNum;
-
-        vals = allRows
-            .Select(r => GetDynamicValueInRowRange(r, keyNameVal, indexNumVal))
-            .Where(s => !string.IsNullOrWhiteSpace(s))
-            .Distinct(StringComparer.OrdinalIgnoreCase)
-            .OrderBy(s => s, StringComparer.OrdinalIgnoreCase)
-            .ToList();
-    }
-    else
-    {
-        if (colKey == "StartTs" || colKey == "EndTs" || colKey == "SuccessTs")
+        if (byIndex.TryGetValue(idx, out var val) &&
+            !string.IsNullOrWhiteSpace(val))
         {
-            vals = allRows
-                .Select(r =>
-                {
-                    var prop = typeof(CombinedRow).GetProperty(colKey);
-
-                    if (prop == null)
-                        return null;
-
-                    var value = prop.GetValue(r);
-
-                    if (value == null)
-                        return null;
-
-                    DateTime? dt = GetDateTimeValue(r, colKey);
-
-                    if (!dt.HasValue)
-                        return null;
-
-                    return dt.Value.ToString("yyyy-MM-dd HH:mm:ss.fff");
-                })
-                .Where(s => !string.IsNullOrWhiteSpace(s))
-                .Distinct(StringComparer.OrdinalIgnoreCase)
-                .OrderBy(s => s, StringComparer.OrdinalIgnoreCase)
-                .ToList();
-        }
-        else
-        {
-            vals = allRows
-                .Select(r =>
-                {
-                    var prop = typeof(CombinedRow).GetProperty(colKey);
-
-                    if (prop == null)
-                        return null;
-
-                    var value = prop.GetValue(r);
-
-                    return value == null ? "(null)" : Convert.ToString(value);
-                })
-                .Where(s => s != null)
-                .Distinct(StringComparer.OrdinalIgnoreCase)
-                .OrderBy(s => s, StringComparer.OrdinalIgnoreCase)
-                .ToList();
+            return val.Trim();
         }
     }
 
-    // 6) 메뉴 구성
-    ContextMenuStrip m = new ContextMenuStrip();
-
-    m.Items.Add("필터 초기화", null, (s, e) =>
-    {
-        activeFilters.Clear();
-
-        txtSearchVar.Text = _BizS;
-        txtSearchVar.ForeColor = Color.Gray;
-
-        searchMergedRows = null;
-
-        ApplyMergedView(true, true);
-    });
-
-    m.Items.Add(new ToolStripSeparator());
-
-    // 값이 너무 많으면 상위 20개만 먼저 표시
-    var valuesToShow = vals.Take(20).ToList();
-
-    foreach (string v in valuesToShow)
-    {
-        string filterValue = v;
-
-        ToolStripMenuItem item = new ToolStripMenuItem(filterValue);
-
-        item.Checked =
-            activeFilters.ContainsKey(colKey) &&
-            activeFilters[colKey].Any(x =>
-                string.Equals(x, filterValue, StringComparison.OrdinalIgnoreCase));
-
-        item.Click += (s, e) =>
-        {
-            if (!activeFilters.ContainsKey(colKey))
-                activeFilters[colKey] = new List<string>();
-
-            bool alreadyChecked = activeFilters[colKey].Any(x =>
-                string.Equals(x, filterValue, StringComparison.OrdinalIgnoreCase));
-
-            if (alreadyChecked)
-            {
-                activeFilters[colKey].RemoveAll(x =>
-                    string.Equals(x, filterValue, StringComparison.OrdinalIgnoreCase));
-            }
-            else
-            {
-                activeFilters[colKey].Add(filterValue);
-            }
-
-            // BR명 컬럼 필터일 때만 검색창에 "BR_A || BR_B" 형태로 반영
-            SyncMergedVarFilterToSearchBox(colKey);
-
-            bool rebuildDynamicColumns =
-                string.Equals(colKey, "Var", StringComparison.OrdinalIgnoreCase);
-
-            ApplyFilters(rebuildDynamicColumns);
-        };
-
-        m.Items.Add(item);
-    }
-
-    if (vals.Count > 20)
-    {
-        m.Items.Add(new ToolStripSeparator());
-
-        var searchItem = new ToolStripMenuItem("더보기...");
-
-        searchItem.Click += (s, e) =>
-        {
-            ShowFilterSearchDialog(colKey, vals);
-        };
-
-        m.Items.Add(searchItem);
-    }
-
-    m.Show(gridMerged, gridMerged.PointToClient(Cursor.Position));
+    return "";
 }
 
+이 메서드는 파일을 다시 읽지 않음.
+BuildKVIndexForFile()에서 저장해둔 값 중에서 row.StartIdx ~ row.EndIdx 범위만 조회함.
 
----
+즉, 지금 수정 방향에서는 이렇게 동작함.
 
-12. ShowFilterSearchDialog(string colKey, List<string> allValues) 전체 교체
+BuildKVIndexForFile()
+→ LOT Key + table.json BIZ_KEY_RULES Key만 저장
 
-private void ShowFilterSearchDialog(string colKey, List<string> allValues)
-{
-    Form searchForm = new Form();
-    searchForm.Text = "필터 검색";
-    searchForm.Width = 400;
-    searchForm.Height = 500;
+GetDynamicValueInRowRange()
+→ 저장된 값 중 Start~End 범위에서 해당 Key[Index] 값 조회
+→ STEP_3 / STEP_5 둘 다 범위 안이면 아래쪽 값 우선
 
-    TextBox searchBox = new TextBox
-    {
-        Dock = DockStyle.Top
-    };
-
-    ListBox valueListBox = new ListBox
-    {
-        Dock = DockStyle.Fill,
-        SelectionMode = SelectionMode.MultiExtended
-    };
-
-    // ListBox에 초기 데이터 바인딩
-    valueListBox.DataSource = allValues.ToList();
-
-    searchBox.TextChanged += (s, e) =>
-    {
-        var filteredValues = allValues
-            .Where(v => v.IndexOf(searchBox.Text, StringComparison.OrdinalIgnoreCase) >= 0)
-            .ToList();
-
-        valueListBox.DataSource = filteredValues;
-    };
-
-    Button okButton = new Button
-    {
-        Text = "확인",
-        Dock = DockStyle.Bottom
-    };
-
-    okButton.Click += (s, e) =>
-    {
-        if (!activeFilters.ContainsKey(colKey))
-            activeFilters[colKey] = new List<string>();
-        else
-            activeFilters[colKey].Clear();
-
-        foreach (string selectedValue in valueListBox.SelectedItems)
-        {
-            activeFilters[colKey].Add(selectedValue);
-        }
-
-        // 더보기에서 BR명 선택해도 검색창에 "BR_A || BR_B" 반영
-        SyncMergedVarFilterToSearchBox(colKey);
-
-        bool rebuildDynamicColumns =
-            string.Equals(colKey, "Var", StringComparison.OrdinalIgnoreCase);
-
-        ApplyFilters(rebuildDynamicColumns);
-
-        searchForm.Close();
-    };
-
-    searchForm.Controls.Add(okButton);
-    searchForm.Controls.Add(valueListBox);
-    searchForm.Controls.Add(searchBox);
-
-    searchForm.ShowDialog();
-}
-
-앞으로 수정본은 부분 블록 금지, 전체 메서드 기준으로 줄게.
+STEP_5 값을 우선해야 하니까 OrderByDescending(x => x.Key)가 들어간 게 맞음.
