@@ -1,178 +1,567 @@
-28s 동안 처리함
+1m 52s 동안 처리함
 
-Ubuntu 바탕화면까지 들어온 상태라면 Ctrl + Alt + T로 터미널을 열고 순서대로 진행해.
+작업 방향은 대용량 안정화 모드로 잡아야 함.
+지금은 JSON 동적 컬럼 / KV 전체 인덱스 때문에 메모리가 과하게 올라감. 현재 코드에서 BuildKVIndexForFile()이 파일 전체를 다시 읽고 kvIndexByFile에 Key/Index/Value 전체를 보관하는 구조라, 500MB 로그에서는 메모리가 크게 터질 수 있음. 
 
-1. 기본 설정 및 업데이트
+이번 수정 목표는 이거야.
 
-sudo timedatectl set-timezone Asia/Seoul
-sudo timedatectl set-ntp true
-sudo apt update
-sudo apt full-upgrade -y
+1. JSON 동적 컬럼 자동 표시 OFF
+2. kvIndexByFile 전체 저장 OFF
+3. LOT 추출만 유지
+4. 검색 시 KV 전체 검색 OFF
+5. 화면 표시 Row 10,000건 제한
 
-완료 후 재부팅:
+즉, 속도/메모리 우선으로 간다.
+table.json의 BIZ_KEY_RULES 동적 컬럼은 일단 끄는 게 맞다.
 
-sudo reboot
 
-2. 서버 필수 프로그램 설치
+---
 
-재부팅 후 터미널을 다시 열고:
+1. 필드 추가
 
-sudo apt install -y openssh-server curl tar lib32gcc-s1 lib32stdc++6 ufw
+추가 위치
 
-SSH 자동 실행:
+MainForm 클래스 상단에 이미 이게 있음.
 
-sudo systemctl enable --now ssh
+private int _mergedApplyVersion = 0;
 
-IP 확인:
+그 아래에 추가.
 
-hostname -I
+private const int MERGED_DISPLAY_LIMIT = 10000;
 
-192.168.x.x 주소를 적어둔다.
 
-3. 새티스팩토리 전용 계정 생성
+---
 
-sudo useradd --create-home --shell /bin/bash steam
+2. 메서드 전체 교체
 
-폴더 생성:
+교체 대상 메서드
 
-sudo -u steam mkdir -p /home/steam/steamcmd
-sudo -u steam mkdir -p /home/steam/satisfactory
+private void BuildKVIndexForFile(string file)
 
-4. SteamCMD 설치
+아래 코드로 전체 교체
 
-sudo -u steam bash -c 'cd /home/steam/steamcmd && curl -fsSL https://steamcdn-a.akamaihd.net/client/installer/steamcmd_linux.tar.gz | tar -xz'
+private void BuildKVIndexForFile(string file)
+{
+    // 대용량 안정화 모드:
+    // 기존처럼 모든 Key/Index/Value를 kvIndexByFile에 저장하지 않는다.
+    // LOT 표시용 값만 lotIndexByFile에 저장한다.
+    // 메서드 이름은 호출부 변경을 줄이기 위해 그대로 유지한다.
 
-확인:
+    string source = Path.GetFileName(file);
 
-ls -l /home/steam/steamcmd/steamcmd.sh
+    kvIndexByFile[source] =
+        new Dictionary<int, Dictionary<string, Dictionary<int, string>>>();
 
-파일이 표시되면 정상이다.
+    lotIndexByFile[source] =
+        new Dictionary<int, string>();
 
-5. 새티스팩토리 서버 설치
+    var lotMap = lotIndexByFile[source];
 
-sudo -u steam /home/steam/steamcmd/steamcmd.sh \
-  +force_install_dir /home/steam/satisfactory \
-  +login anonymous \
-  +app_update 1690800 validate \
-  +quit
+    int currentHeaderIdx = -1;
+    string currentVarName = "";
 
-다운로드가 끝나면 확인:
+    Dictionary<string, Dictionary<int, string>> currentPairs = null;
 
-ls -l /home/steam/satisfactory/FactoryServer.sh
+    Action flushCurrentBlock = () =>
+    {
+        if (currentHeaderIdx < 0)
+            return;
 
-6. 자동 실행 서비스 등록
+        if (currentPairs == null || currentPairs.Count == 0)
+            return;
 
-sudo nano /etc/systemd/system/satisfactory.service
+        string lot = PickLotFromPairs(currentVarName, currentPairs);
 
-아래 내용을 붙여넣는다.
+        if (!string.IsNullOrWhiteSpace(lot))
+            lotMap[currentHeaderIdx] = lot;
+    };
 
-[Unit]
-Description=Satisfactory Dedicated Server
-Wants=network-online.target
-After=network-online.target
+    int lineIndex = -1;
 
-[Service]
-Type=simple
-User=steam
-Group=steam
-Environment=HOME=/home/steam
-WorkingDirectory=/home/steam/satisfactory
+    using (var fs = new FileStream(
+        file,
+        FileMode.Open,
+        FileAccess.Read,
+        FileShare.ReadWrite | FileShare.Delete))
+    using (var sr = new StreamReader(fs, Encoding.UTF8, true, 1024 * 64))
+    {
+        string line;
 
-ExecStartPre=/home/steam/steamcmd/steamcmd.sh +force_install_dir /home/steam/satisfactory +login anonymous +app_update 1690800 +quit
-ExecStart=/home/steam/satisfactory/FactoryServer.sh -unattended
+        while ((line = sr.ReadLine()) != null)
+        {
+            lineIndex++;
 
-Restart=on-failure
-RestartSec=10
-KillSignal=SIGINT
-TimeoutStopSec=120
-LimitNOFILE=1048576
+            var hm = headRx.Match(line);
 
-StandardOutput=journal
-StandardError=journal
+            if (hm.Success)
+            {
+                // 이전 블록 LOT 확정
+                flushCurrentBlock();
 
-[Install]
-WantedBy=multi-user.target
+                currentHeaderIdx = lineIndex;
+                currentPairs = null;
+                currentVarName = "";
 
-저장:
+                string rest = hm.Groups["rest"].Value;
+                currentVarName = GetVarFromHeader(source, rest);
 
-Ctrl + O
-Enter
-Ctrl + X
+                if (string.IsNullOrWhiteSpace(currentVarName) ||
+                    !currentVarName.StartsWith("BR_", StringComparison.OrdinalIgnoreCase))
+                {
+                    continue;
+                }
 
-등록하고 실행:
+                currentPairs = new Dictionary<string, Dictionary<int, string>>(
+                    StringComparer.OrdinalIgnoreCase
+                );
 
-sudo systemctl daemon-reload
-sudo systemctl enable --now satisfactory
+                continue;
+            }
 
-상태 확인:
+            if (currentHeaderIdx < 0)
+                continue;
 
-systemctl status satisfactory --no-pager
+            if (currentPairs == null)
+                continue;
 
-active (running)이면 정상이다.
+            var kv = Regex.Match(
+                line,
+                @"^\s*\[(?<idx>\d+)\s*:\s*(?<key>[^\]]+)\]\s*:\s*(?<val>.*)$",
+                RegexOptions.IgnoreCase);
 
-7. 방화벽 설정
+            if (!kv.Success)
+                continue;
 
-sudo ufw allow OpenSSH
-sudo ufw allow 7777/tcp
-sudo ufw allow 7777/udp
-sudo ufw allow 8888/tcp
-sudo ufw enable
+            int idx;
+            if (!int.TryParse(kv.Groups["idx"].Value, out idx))
+                idx = 0;
 
-확인:
+            string key = kv.Groups["key"].Value.Trim();
+            string val = kv.Groups["val"].Value.Trim();
 
-sudo ufw status
+            if (string.IsNullOrWhiteSpace(key))
+                continue;
 
-8. 서버 로그 확인
+            // LOT 후보 키만 저장한다.
+            // 블록 단위 임시 Dictionary라 메모리 부담이 작다.
+            if (!IsLotCandidateKey(currentVarName, key))
+                continue;
 
-journalctl -u satisfactory -f
+            if (!currentPairs.TryGetValue(key, out var byIndex))
+            {
+                byIndex = new Dictionary<int, string>();
+                currentPairs[key] = byIndex;
+            }
 
-로그 화면을 빠져나올 때:
+            byIndex[idx] = val;
+        }
+    }
 
-Ctrl + C
+    // 마지막 블록 처리
+    flushCurrentBlock();
+}
 
-포트 확인:
 
-sudo ss -lntup | grep -E '7777|8888'
+---
 
-9. 게임에서 연결
+3. 새 메서드 추가
 
-게임 PC에서 새티스팩토리를 실행한다.
+추가 위치
 
-서버 관리자
-→ 서버 추가
-→ Ubuntu 노트북의 192.168.x.x 입력
-→ 포트 7777
+PickLotFromPairs(...) 바로 위나 아래.
 
-서버 소유권을 등록하고 다음을 설정한다.
+새로 추가
 
-서버 이름
+private bool IsLotCandidateKey(string varName, string key)
+{
+    if (string.IsNullOrWhiteSpace(key))
+        return false;
 
-관리자 비밀번호
+    var keys = new List<string>();
 
-플레이어 접속 비밀번호
+    if (!string.IsNullOrWhiteSpace(varName) &&
+        lotKeyRules != null &&
+        lotKeyRules.TryGetValue(varName, out var ruleKeys) &&
+        ruleKeys != null)
+    {
+        keys.AddRange(ruleKeys);
+    }
 
-새 게임 생성 또는 세이브 업로드
+    if (defaultLotKeys != null)
+        keys.AddRange(defaultLotKeys);
 
-Auto Pause 끄기: 사람이 없어도 공장 가동
+    keys.AddRange(new[]
+    {
+        "OUT_LOTID",
+        "INPUT_LOTID",
+        "INPUT_CSTID",
+        "PROD_LOTID",
+        "LOTID",
+        "LOT_ID",
+        "CSTID"
+    });
 
-Auto Save on Disconnect 켜기
+    return keys
+        .Where(x => !string.IsNullOrWhiteSpace(x))
+        .Distinct(StringComparer.OrdinalIgnoreCase)
+        .Any(x => string.Equals(x, key, StringComparison.OrdinalIgnoreCase));
+}
 
 
-10. GUI 자동 실행 끄기
+---
 
-서버 접속까지 확인한 다음 실행한다.
+4. 메서드 전체 교체
 
-sudo systemctl set-default multi-user.target
-sudo reboot
+교체 대상 메서드
 
-재부팅 후 그래픽 화면 대신 로그인 터미널만 나오며, 새티스팩토리 서버는 자동 실행된다. Ubuntu Desktop 패키지는 남아 있지만 GUI가 실행되지 않아 RAM 사용량이 줄어든다.
+private void FillLotByIndex(CombinedRow row)
 
-GUI를 다시 사용하려면:
+아래 코드로 전체 교체
 
-sudo systemctl set-default graphical.target
-sudo reboot
+private void FillLotByIndex(CombinedRow row)
+{
+    if (row == null)
+        return;
 
-우선 1~5단계까지 진행하고 아래 두 명령의 결과를 보내주면 설치 상태를 확인해줄게.
+    if (!string.IsNullOrEmpty(row.MLot))
+        return;
 
-hostname -I
-ls -l /home/steam/satisfactory/FactoryServer.sh
+    if (row.SuccessIdx < 0)
+        return;
+
+    if (string.IsNullOrWhiteSpace(row.SourceFile))
+        return;
+
+    if (lotIndexByFile.TryGetValue(row.SourceFile, out var lotMap) &&
+        lotMap != null &&
+        lotMap.TryGetValue(row.SuccessIdx, out var lot) &&
+        !string.IsNullOrWhiteSpace(lot))
+    {
+        row.MLot = lot;
+    }
+}
+
+
+---
+
+5. 메서드 전체 교체
+
+교체 대상 메서드
+
+private void FillLotIfPossible(CombinedRow row)
+
+아래 코드로 전체 교체
+
+private void FillLotIfPossible(CombinedRow row)
+{
+    FillLotByIndex(row);
+}
+
+
+---
+
+6. 메서드 전체 교체
+
+교체 대상 메서드
+
+private void UpdateDynamicColumnsForSearch()
+
+아래 코드로 전체 교체
+
+private void UpdateDynamicColumnsForSearch()
+{
+    // 대용량 안정화 모드:
+    // JSON 기반 동적 컬럼 자동 생성은 OFF.
+    // 500MB 로그에서 동적 컬럼은 메모리/CPU 부담이 큼.
+    // 상세 값은 행 더블클릭 상세 로그에서 확인한다.
+
+    foreach (var name in currentDynamicCols.ToList())
+    {
+        if (gridMerged.Columns.Contains(name))
+            gridMerged.Columns.Remove(name);
+    }
+
+    currentDynamicCols.Clear();
+
+    // 혹시 이전에 동적 컬럼 필터가 남아 있으면 제거
+    foreach (var key in activeFilters.Keys.ToList())
+    {
+        if (key.StartsWith("colExtra_", StringComparison.OrdinalIgnoreCase))
+            activeFilters.Remove(key);
+    }
+
+    gridMerged.Refresh();
+}
+
+
+---
+
+7. 메서드 전체 교체
+
+교체 대상 메서드
+
+private bool MergedRowContainsSearchKey(CombinedRow row, string key)
+
+아래 코드로 전체 교체
+
+private bool MergedRowContainsSearchKey(CombinedRow row, string key)
+{
+    if (row == null)
+        return false;
+
+    if (string.IsNullOrWhiteSpace(key))
+        return true;
+
+    // 대용량 안정화 모드:
+    // KV 전체 범위 검색은 하지 않는다.
+    // Var / Status / LOT / 파일명 / 시간 / 소요시간만 검색한다.
+    string[] baseValues =
+    {
+        row.Var ?? "",
+        row.Status ?? "",
+        row.MLot ?? "",
+        row.SourceFile ?? "",
+        row.StartTs.ToString("yyyy-MM-dd HH:mm:ss.fff"),
+        row.SuccessTs.HasValue ? row.SuccessTs.Value.ToString("yyyy-MM-dd HH:mm:ss.fff") : "",
+        row.EndTs.HasValue ? row.EndTs.Value.ToString("yyyy-MM-dd HH:mm:ss.fff") : "",
+        row.DurationSeconds.HasValue ? row.DurationSeconds.Value.ToString() : ""
+    };
+
+    foreach (string value in baseValues)
+    {
+        if (!string.IsNullOrWhiteSpace(value) &&
+            value.IndexOf(key, StringComparison.OrdinalIgnoreCase) >= 0)
+        {
+            return true;
+        }
+    }
+
+    return false;
+}
+
+
+---
+
+8. 메서드 전체 교체
+
+교체 대상 메서드
+
+private async Task ApplyMergedViewAsync(bool rebuildSearchBase = true, bool rebuildDynamicColumns = true)
+
+아래 코드로 전체 교체
+
+private async Task ApplyMergedViewAsync(bool rebuildSearchBase = true, bool rebuildDynamicColumns = true)
+{
+    int version = ++_mergedApplyVersion;
+
+    string oldStatus = statusLabel.Text;
+
+    try
+    {
+        btnSearch.Enabled = false;
+        btnClear.Enabled = false;
+        statusLabel.Text = "검색/필터 적용 중...";
+        Cursor = Cursors.AppStarting;
+
+        string[] searchKeys = GetSearchKeys();
+
+        Dictionary<string, List<string>> filterSnapshot =
+            activeFilters.ToDictionary(
+                x => x.Key,
+                x => x.Value == null ? new List<string>() : x.Value.ToList(),
+                StringComparer.OrdinalIgnoreCase
+            );
+
+        List<CombinedRow> allRowsSnapshot = allMergedRows ?? new List<CombinedRow>();
+        List<CombinedRow> searchRowsSnapshot = searchMergedRows;
+
+        var result = await Task.Run(() =>
+        {
+            List<CombinedRow> localSearchRows;
+
+            if (rebuildSearchBase || searchRowsSnapshot == null)
+            {
+                localSearchRows = FilterMergedBySearchKeys(allRowsSnapshot, searchKeys).ToList();
+            }
+            else
+            {
+                localSearchRows = searchRowsSnapshot;
+            }
+
+            IEnumerable<CombinedRow> filtered =
+                ApplyMergedColumnFilters(localSearchRows, filterSnapshot);
+
+            // 화면 바인딩은 최대 10,000건만.
+            // 전체를 DataGridView에 붙이면 메모리/렌더링에서 터짐.
+            List<CombinedRow> displayRows =
+                filtered
+                    .Take(MERGED_DISPLAY_LIMIT + 1)
+                    .ToList();
+
+            bool limited = displayRows.Count > MERGED_DISPLAY_LIMIT;
+
+            if (limited)
+                displayRows.RemoveAt(displayRows.Count - 1);
+
+            return new
+            {
+                SearchRows = localSearchRows,
+                DisplayRows = displayRows,
+                IsLimited = limited
+            };
+        });
+
+        if (version != _mergedApplyVersion)
+            return;
+
+        if (rebuildSearchBase || searchMergedRows == null)
+            searchMergedRows = result.SearchRows;
+
+        mergedRows = result.DisplayRows;
+
+        bsMerged.DataSource = mergedRows;
+
+        if (gridMerged.DataSource == null)
+            gridMerged.DataSource = bsMerged;
+
+        bs.DataSource = gridMerged.DataSource;
+
+        bsMerged.ResetBindings(false);
+
+        if (rebuildDynamicColumns)
+            UpdateDynamicColumnsForSearch();
+
+        gridMerged.Refresh();
+        UpdateStatusLabel();
+
+        if (result.IsLimited)
+        {
+            statusLabel.Text =
+                $"완료: 상위 {MERGED_DISPLAY_LIMIT:N0}건만 표시됨. 검색/필터 조건을 더 좁혀야 함.";
+        }
+        else
+        {
+            statusLabel.Text = $"완료: {mergedRows.Count:N0}건 표시";
+        }
+    }
+    catch (Exception ex)
+    {
+        if (version == _mergedApplyVersion)
+        {
+            statusLabel.Text = "검색/필터 오류";
+            MessageBox.Show(ex.ToString(), "검색/필터 오류", MessageBoxButtons.OK, MessageBoxIcon.Error);
+        }
+    }
+    finally
+    {
+        if (version == _mergedApplyVersion)
+        {
+            btnSearch.Enabled = true;
+            btnClear.Enabled = true;
+            Cursor = Cursors.Default;
+
+            if (string.IsNullOrWhiteSpace(statusLabel.Text))
+                statusLabel.Text = oldStatus;
+        }
+    }
+}
+
+
+---
+
+9. 메서드 전체 교체
+
+교체 대상 메서드
+
+private void ShowFilterSearchDialog(string colKey, List<string> allValues)
+
+아래 코드로 전체 교체
+
+private void ShowFilterSearchDialog(string colKey, List<string> allValues)
+{
+    Form searchForm = new Form();
+    searchForm.Text = "필터 검색";
+    searchForm.Width = 400;
+    searchForm.Height = 500;
+
+    TextBox searchBox = new TextBox { Dock = DockStyle.Top };
+    ListBox valueListBox = new ListBox
+    {
+        Dock = DockStyle.Fill,
+        SelectionMode = SelectionMode.MultiExtended
+    };
+
+    // 필터 목록도 너무 많으면 UI가 버벅이므로 제한
+    List<string> baseValues = allValues
+        .Take(5000)
+        .ToList();
+
+    valueListBox.DataSource = baseValues.ToList();
+
+    searchBox.TextChanged += (s, e) =>
+    {
+        var filteredValues = baseValues
+            .Where(v => v.IndexOf(searchBox.Text, StringComparison.OrdinalIgnoreCase) >= 0)
+            .Take(5000)
+            .ToList();
+
+        valueListBox.DataSource = filteredValues;
+    };
+
+    Button okButton = new Button { Text = "확인", Dock = DockStyle.Bottom };
+
+    okButton.Click += (s, e) =>
+    {
+        if (!activeFilters.ContainsKey(colKey))
+            activeFilters[colKey] = new List<string>();
+        else
+            activeFilters[colKey].Clear();
+
+        foreach (string selectedValue in valueListBox.SelectedItems)
+        {
+            activeFilters[colKey].Add(selectedValue);
+        }
+
+        SyncMergedVarFilterToSearchBox(colKey);
+
+        bool rebuildDynamicColumns =
+            string.Equals(colKey, "Var", StringComparison.OrdinalIgnoreCase);
+
+        ApplyFilters(rebuildDynamicColumns);
+
+        searchForm.Close();
+    };
+
+    searchForm.Controls.Add(okButton);
+    searchForm.Controls.Add(valueListBox);
+    searchForm.Controls.Add(searchBox);
+
+    searchForm.ShowDialog();
+}
+
+
+---
+
+이번 수정 후 바뀌는 점
+
+유지:
+- BR 결합 보기
+- 검색
+- Var / Status / LOT / 시간 필터
+- LOT 표시
+- 상세 더블클릭 로그 확인
+
+끄는 기능:
+- JSON BIZ_KEY_RULES 기반 동적 컬럼 자동 표시
+- KV 전체 범위 검색
+- colExtra_* 필터
+- 전체 결과 무제한 그리드 표시
+
+이건 기능을 줄이는 게 맞다.
+대신 메모리 폭증을 막는 쪽으로 돌리는 거다.
+
+적용 후 확인할 포인트는 3개만 보면 됨.
+
+1. 500MB 로그 열 때 메모리 사용량이 전보다 줄었는지
+2. 검색 눌렀을 때 응답없음이 줄었는지
+3. LOT 값이 계속 표시되는지
