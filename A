@@ -1,129 +1,434 @@
-30s 동안 처리함
+맞다. 지금은 표시 10,000건 제한이 핵심이 아님.
+먼저 해야 할 건 로드 후에도 rows/viewRows를 계속 들고 있는 구조를 끊는 것임.
 
-맞음. 지금 큰일 난 상태가 맞음.
-다만 원인은 table.json 자체가 아니라 그리드 표시 이벤트가 빠졌거나, 동적 컬럼이 unbound 컬럼인데 값을 넣어주는 코드가 안 도는 상태임.
+현재 기존 흐름은 ParseFileAsync(file)로 전체 rows를 만들고, BuildKVIndexForFile(file)까지 호출한 뒤 ApplyFilterAndBind()에서 다시 viewRows, allMergedRows를 만드는 구조임.
+또 table.json의 BIZ_KEY_RULES는 bizKeyRules에 로드되고 있음. extraKeyRules가 아니라 bizKeyRules를 써야 함. 
 
-증상 기준으로 보면 이거임.
+이번 답변은 1단계만 준다.
+목표는 이거임.
 
-필터 목록에는 값이 뜸
-→ GetDynamicValueInRowRange()는 값 찾고 있음
-→ table.json / kvIndex 쪽은 어느 정도 동작 중
-
-그리드 셀에는 값이 안 뜸
-→ DataGridView 동적 컬럼에 값을 표시해주는 CellFormatting 쪽 문제
-
-그리고 메모리 700MB는 아직 큰데, 지금 코드가 결합 보기에서도 viewRows를 계속 만들고 있어서 불필요하게 한 벌 더 잡고 있음. 이건 바로 줄일 수 있음.
-
-
----
-
-1. 생성자에 이벤트 연결 추가
-
-이건 메서드가 아니라 이벤트 연결이라 한 줄만 추가해야 함.
-
-gridMerged 이벤트 연결하는 부분 근처에 아래 추가.
-
-gridMerged.CellFormatting -= gridMerged_CellFormatting;
-gridMerged.CellFormatting += gridMerged_CellFormatting;
-
-예상 위치는 이런 이벤트들 근처임.
-
-gridMerged.MouseDown += Mer_Dgv_MouseDown;
-gridMerged.CellDoubleClick += GridMerged_CellDoubleClick;
-gridMerged.ColumnHeaderMouseClick += gridMerged_ColumnHeaderMouseClick;
-
-gridMerged.CellFormatting -= gridMerged_CellFormatting;
-gridMerged.CellFormatting += gridMerged_CellFormatting;
-
-이게 없으면 colExtra_* 컬럼은 필터에는 값이 보여도 그리드 셀에는 공백으로 보일 수 있음. 동적 컬럼은 DataPropertyName이 없는 unbound 컬럼이라, 직접 값을 넣어줘야 함.
+1단계 목표:
+- 컬럼 헤더 필터 유지
+- LOT 표시 유지
+- table.json 동적 컬럼 표시 유지
+- STEP_3 / STEP_5 범위 표시 유지
+- 로딩 완료 후 rows/viewRows 메모리 제거
 
 
 ---
 
-2. gridMerged_CellFormatting(...) 전체 추가/교체
+1. BuildKVIndexForFile(string file) 전체 교체
 
-교체 대상
-
-private void gridMerged_CellFormatting(object sender, DataGridViewCellFormattingEventArgs e)
-
-전체 교체
-
-private void gridMerged_CellFormatting(object sender, DataGridViewCellFormattingEventArgs e)
+private void BuildKVIndexForFile(string file)
 {
-    if (e.RowIndex < 0)
-        return;
+    // 메모리 절감 버전:
+    // 모든 Key/Value를 저장하지 않고,
+    // LOT 규칙 Key + table.json BIZ_KEY_RULES Key만 저장한다.
 
-    if (e.ColumnIndex < 0 || e.ColumnIndex >= gridMerged.Columns.Count)
-        return;
+    string source = Path.GetFileName(file);
 
-    DataGridViewColumn col = gridMerged.Columns[e.ColumnIndex];
+    var fileMap = new Dictionary<int, Dictionary<string, Dictionary<int, string>>>();
+    var lotMap = new Dictionary<int, string>();
 
-    if (col == null)
-        return;
+    int currentHeaderIdx = -1;
+    string currentVarName = "";
+    Dictionary<string, Dictionary<int, string>> currentPairs = null;
 
-    if (!col.Name.StartsWith("colExtra_", StringComparison.OrdinalIgnoreCase))
-        return;
+    var kvRx = new Regex(
+        @"^\s*\[(?<idx>\d+)\s*:\s*(?<key>[^\]]+)\]\s*:\s*(?<val>.*)$",
+        RegexOptions.Compiled | RegexOptions.IgnoreCase
+    );
 
-    CombinedRow row = gridMerged.Rows[e.RowIndex].DataBoundItem as CombinedRow;
-
-    if (row == null)
+    Action flushBlock = () =>
     {
-        e.Value = "";
-        e.FormattingApplied = true;
-        return;
+        if (currentHeaderIdx < 0)
+            return;
+
+        if (currentPairs == null || currentPairs.Count == 0)
+            return;
+
+        fileMap[currentHeaderIdx] = currentPairs;
+
+        string lot = PickLotFromPairs(currentVarName, currentPairs);
+
+        if (!string.IsNullOrWhiteSpace(lot))
+            lotMap[currentHeaderIdx] = lot;
+    };
+
+    int lineIndex = -1;
+
+    using (var fs = new FileStream(
+        file,
+        FileMode.Open,
+        FileAccess.Read,
+        FileShare.ReadWrite | FileShare.Delete))
+    using (var sr = new StreamReader(fs, Encoding.UTF8, true, 1024 * 64))
+    {
+        string line;
+
+        while ((line = sr.ReadLine()) != null)
+        {
+            lineIndex++;
+
+            var hm = headRx.Match(line);
+
+            if (hm.Success)
+            {
+                flushBlock();
+
+                currentHeaderIdx = lineIndex;
+                currentPairs = null;
+                currentVarName = "";
+
+                string rest = hm.Groups["rest"].Value;
+                currentVarName = GetVarFromHeader(source, rest);
+
+                if (string.IsNullOrWhiteSpace(currentVarName) ||
+                    !currentVarName.StartsWith("BR_", StringComparison.OrdinalIgnoreCase))
+                {
+                    continue;
+                }
+
+                currentPairs = new Dictionary<string, Dictionary<int, string>>(
+                    StringComparer.OrdinalIgnoreCase
+                );
+
+                continue;
+            }
+
+            if (currentHeaderIdx < 0)
+                continue;
+
+            if (currentPairs == null)
+                continue;
+
+            var kv = kvRx.Match(line);
+
+            if (!kv.Success)
+                continue;
+
+            int idx;
+            if (!int.TryParse(kv.Groups["idx"].Value, out idx))
+                idx = 0;
+
+            string key = kv.Groups["key"].Value.Trim();
+            string val = kv.Groups["val"].Value.Trim();
+
+            if (string.IsNullOrWhiteSpace(key))
+                continue;
+
+            if (!ShouldKeepKvKeyForBiz(currentVarName, key))
+                continue;
+
+            if (!currentPairs.TryGetValue(key, out var byIndex))
+            {
+                byIndex = new Dictionary<int, string>();
+                currentPairs[key] = byIndex;
+            }
+
+            byIndex[idx] = val;
+        }
     }
 
-    string dynamicKey = "";
-    int dynamicIndex = -1;
+    flushBlock();
 
-    // 1순위: 컬럼 Tag 사용
-    if (col.Tag is ValueTuple<string, int> tagTuple)
+    lock (locker)
     {
-        dynamicKey = tagTuple.Item1;
-        dynamicIndex = tagTuple.Item2;
+        kvIndexByFile[source] = fileMap;
+        lotIndexByFile[source] = lotMap;
     }
-    else
-    {
-        // 2순위: 컬럼 Name 파싱
-        TryParseDynamicColumnName(col.Name, out dynamicKey, out dynamicIndex);
-    }
-
-    if (string.IsNullOrWhiteSpace(dynamicKey) || dynamicIndex < 0)
-    {
-        e.Value = "";
-        e.FormattingApplied = true;
-        return;
-    }
-
-    string value = GetDynamicValueInRowRange(row, dynamicKey, dynamicIndex);
-
-    e.Value = value ?? "";
-    e.FormattingApplied = true;
 }
 
-이게 들어가야 LOT 뒤에 생성된 table.json 컬럼 값이 실제 그리드에 표시됨.
+
+---
+
+2. 새 메서드 추가
+
+위치
+
+PickLotFromPairs(...) 바로 아래에 추가.
+
+private bool ShouldKeepKvKeyForBiz(string varName, string key)
+{
+    if (string.IsNullOrWhiteSpace(key))
+        return false;
+
+    var targetKeys = new List<string>();
+
+    // 1) table.json LOT_KEY_RULES
+    if (!string.IsNullOrWhiteSpace(varName) &&
+        lotKeyRules != null &&
+        lotKeyRules.TryGetValue(varName, out var lotRuleKeys) &&
+        lotRuleKeys != null)
+    {
+        targetKeys.AddRange(lotRuleKeys);
+    }
+
+    // 2) table.json DEFAULT_LOT_KEYS
+    if (defaultLotKeys != null)
+        targetKeys.AddRange(defaultLotKeys);
+
+    // 3) 안전 기본 LOT 후보
+    targetKeys.AddRange(new[]
+    {
+        "OUT_LOTID",
+        "INPUT_LOTID",
+        "INPUT_CSTID",
+        "PROD_LOTID",
+        "LOTID",
+        "LOT_ID",
+        "CSTID"
+    });
+
+    // 4) table.json BIZ_KEY_RULES
+    // 중요: extraKeyRules 아님. LoadRules()에서 bizKeyRules에 들어간다.
+    if (!string.IsNullOrWhiteSpace(varName) &&
+        bizKeyRules != null &&
+        bizKeyRules.TryGetValue(varName, out var bizKeys) &&
+        bizKeys != null)
+    {
+        targetKeys.AddRange(bizKeys);
+    }
+
+    return targetKeys
+        .Where(x => !string.IsNullOrWhiteSpace(x))
+        .Distinct(StringComparer.OrdinalIgnoreCase)
+        .Any(x => string.Equals(x, key, StringComparison.OrdinalIgnoreCase));
+}
 
 
 ---
 
-3. 메모리 줄이기: ApplyFilterAndBind() 전체 교체
+3. FillLotByIndex(CombinedRow row) 전체 교체
 
-지금 결합 보기에서도 viewRows를 만들고 BindLines(viewRows)까지 하고 있으면 메모리 한 벌 더 잡음.
-결합 보기에서는 라인 보기용 viewRows를 만들 필요 없음.
+LOT이 엉뚱하게 잡히는 문제 때문에 SuccessIdx만 보지 말고 StartIdx~EndIdx 범위도 fallback으로 보게 수정한다.
 
-교체 대상
+private void FillLotByIndex(CombinedRow row)
+{
+    if (row == null)
+        return;
 
-private void ApplyFilterAndBind()
+    if (!string.IsNullOrWhiteSpace(row.MLot))
+        return;
 
-전체 교체
+    if (string.IsNullOrWhiteSpace(row.SourceFile))
+        return;
+
+    if (!kvIndexByFile.TryGetValue(row.SourceFile, out var fileMap) || fileMap == null)
+        return;
+
+    // 1순위: SuccessIdx 블록
+    if (row.SuccessIdx >= 0)
+    {
+        if (lotIndexByFile.TryGetValue(row.SourceFile, out var lotMap) &&
+            lotMap != null &&
+            lotMap.TryGetValue(row.SuccessIdx, out var lot) &&
+            !string.IsNullOrWhiteSpace(lot))
+        {
+            row.MLot = lot;
+            return;
+        }
+
+        if (fileMap.TryGetValue(row.SuccessIdx, out var successPairs) &&
+            successPairs != null)
+        {
+            string lot = PickLotFromPairs(row.Var, successPairs);
+
+            if (!string.IsNullOrWhiteSpace(lot))
+            {
+                row.MLot = lot;
+                return;
+            }
+        }
+    }
+
+    // 2순위: StartIdx~EndIdx 범위에서 아래쪽 블록 우선
+    // STEP_5가 STEP_3보다 아래면 STEP_5 LOT이 우선됨.
+    int start = row.StartIdx;
+    int end = row.EndIdx;
+
+    if (start < 0 && row.SuccessIdx >= 0)
+        start = row.SuccessIdx;
+
+    if (end < 0 && row.SuccessIdx >= 0)
+        end = row.SuccessIdx;
+
+    if (start < 0 || end < 0)
+        return;
+
+    if (start > end)
+    {
+        int temp = start;
+        start = end;
+        end = temp;
+    }
+
+    foreach (var block in fileMap
+        .Where(x => x.Key >= start && x.Key <= end)
+        .OrderByDescending(x => x.Key))
+    {
+        string lot = PickLotFromPairs(row.Var, block.Value);
+
+        if (!string.IsNullOrWhiteSpace(lot))
+        {
+            row.MLot = lot;
+            return;
+        }
+    }
+}
+
+
+---
+
+4. FillLotIfPossible(CombinedRow row) 전체 교체
+
+private void FillLotIfPossible(CombinedRow row)
+{
+    FillLotByIndex(row);
+}
+
+
+---
+
+5. LoadOneFileAsync(string file) 전체 교체
+
+이게 이번 1단계의 핵심임.
+rows는 결합 생성까지만 쓰고, 로딩 완료 후 비운다.
+
+private async Task LoadOneFileAsync(string file)
+{
+    SetBusy("파일 읽는 중…", true);
+
+    try
+    {
+        txtSearchVar.Text = _BizS;
+        txtSearchVar.ForeColor = Color.Gray;
+        txtSearchVar.Items.Clear();
+
+        isSearchComboInitialized = false;
+        activeFilters.Clear();
+
+        lock (locker)
+        {
+            rows.Clear();
+            viewRows.Clear();
+
+            kvIndexByFile.Clear();
+            lotIndexByFile.Clear();
+
+            allMergedRows.Clear();
+            if (searchMergedRows != null)
+                searchMergedRows.Clear();
+
+            mergedRows.Clear();
+        }
+
+        await Task.Run(async () =>
+        {
+            await ParseFileAsync(file);
+        });
+
+        int parsedLineCount = rows.Count;
+
+        List<CombinedRow> builtMergedRows = null;
+
+        await Task.Run(() =>
+        {
+            // 전체 Key/Value 저장이 아니라 필요한 Key만 저장하는 BuildKVIndexForFile
+            BuildKVIndexForFile(file);
+
+            IEnumerable<LogRow> forMerged = rows.AsEnumerable();
+
+            if (chkBROnly.Checked)
+            {
+                forMerged = forMerged.Where(r =>
+                    (r.Var ?? "").StartsWith("BR_", StringComparison.OrdinalIgnoreCase));
+            }
+
+            builtMergedRows = BuildMergedQueue(
+                forMerged
+                    .OrderBy(r => r.SourceFile, StringComparer.OrdinalIgnoreCase)
+                    .ThenBy(r => r.LineIndex)
+            );
+        });
+
+        allMergedRows = builtMergedRows ?? new List<CombinedRow>();
+
+        // 콤보박스 BR 목록 생성
+        var mVarValues = allMergedRows
+            .Select(r => r.Var)
+            .Where(v =>
+                !string.IsNullOrWhiteSpace(v) &&
+                v.StartsWith("BR_", StringComparison.OrdinalIgnoreCase))
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .OrderBy(v => v, StringComparer.OrdinalIgnoreCase)
+            .ToList();
+
+        foreach (var val in mVarValues)
+        {
+            if (!txtSearchVar.Items.Contains(val))
+                txtSearchVar.Items.Add(val);
+        }
+
+        isSearchComboInitialized = true;
+
+        // 핵심:
+        // 결합 보기에서는 rows/viewRows를 계속 들고 있을 필요가 없음.
+        rows.Clear();
+        rows.TrimExcess();
+
+        viewRows.Clear();
+        viewRows.TrimExcess();
+
+        bsLines.DataSource = null;
+
+        searchMergedRows = null;
+
+        // allMergedRows 기준으로 화면 표시/필터/동적컬럼 구성
+        ApplyMergedView(true, true);
+
+        GC.Collect();
+        GC.WaitForPendingFinalizers();
+        GC.Collect();
+
+        statusLabel.Text =
+            $"완료: {Path.GetFileName(file)} / 라인 {parsedLineCount:N0} / 결합 {allMergedRows.Count:N0}건";
+
+        UpdateStatusLabel();
+    }
+    catch (Exception ex)
+    {
+        statusLabel.Text = "오류 발생";
+        MessageBox.Show(ex.ToString(), "오류", MessageBoxButtons.OK, MessageBoxIcon.Error);
+    }
+    finally
+    {
+        SetBusy(statusLabel.Text, false);
+    }
+}
+
+
+---
+
+6. ApplyFilterAndBind() 전체 교체
+
+검색 버튼이나 필터 초기화에서 이 메서드가 호출돼도, rows가 비어 있으면 allMergedRows 기준으로만 동작하게 만든다.
 
 private void ApplyFilterAndBind()
 {
+    // rows가 비어 있으면 이미 경량 로딩 완료 상태.
+    // 이때는 allMergedRows 기준으로만 다시 표시한다.
+    if (rows == null || rows.Count == 0)
+    {
+        ApplyMergedView(true, true);
+        ToggleMode();
+        UpdateStatusLabel();
+        return;
+    }
+
     // =========================
     // 1. 라인 보기 처리
     // =========================
-    // 결합 보기(chkCombine.Checked == true)에서는 viewRows를 만들지 않는다.
-    // 이게 rows 한 벌을 더 잡아먹는 주요 원인 중 하나임.
     if (!chkCombine.Checked)
     {
         IEnumerable<LogRow> q = rows;
@@ -154,7 +459,7 @@ private void ApplyFilterAndBind()
     // =========================
     // 2. 결합 보기 원본 생성
     // =========================
-    var forMerged = rows.AsEnumerable();
+    IEnumerable<LogRow> forMerged = rows.AsEnumerable();
 
     if (chkBROnly.Checked)
     {
@@ -168,37 +473,7 @@ private void ApplyFilterAndBind()
             .ThenBy(r => r.LineIndex)
     );
 
-    // =========================
-    // 3. 비즈 검색창 한 줄 검색
-    // =========================
-    string[] keys = GetSearchKeys();
-
-    IEnumerable<CombinedRow> source = allMergedRows;
-
-    if (keys.Length > 0)
-    {
-        source = source.Where(r =>
-            keys.Any(k =>
-                !string.IsNullOrWhiteSpace(r.Var) &&
-                r.Var.IndexOf(k, StringComparison.OrdinalIgnoreCase) >= 0));
-    }
-
-    // searchMergedRows는 필터 기준 원본으로 유지
-    searchMergedRows = source.ToList();
-
-    // 컬럼 필터가 있으면 적용
-    mergedRows = ApplyMergedColumnFilters(searchMergedRows, activeFilters)
-        .ToList();
-
-    bsMerged.DataSource = null;
-    bsMerged.DataSource = mergedRows;
-
-    gridMerged.DataSource = bsMerged;
-    bs.DataSource = gridMerged.DataSource;
-
-    UpdateDynamicColumnsForSearch();
-
-    gridMerged.Invalidate();
+    ApplyMergedView(true, true);
 
     ToggleMode();
     UpdateStatusLabel();
@@ -207,19 +482,100 @@ private void ApplyFilterAndBind()
 
 ---
 
-4. 확인해야 할 결과
+7. gridMerged_CellFormatting(...) 전체 교체
 
-적용 후 확인 순서:
+table.json 컬럼이 필터에는 뜨는데 그리드에는 안 뜨는 문제는 이 메서드가 없거나 이벤트 연결이 안 된 경우가 가장 큼.
 
-1. 파일 열기
-2. BR 검색 안 한 상태에서 LOT 값 확인
-3. BR_PRD_REG_RM_EIF_EQPT_START 검색
-4. LOT 뒤에 table.json 컬럼 생성 확인
-5. 생성된 컬럼의 셀 값 표시 확인
-6. 컬럼 헤더 ▼ 필터 값 확인
-7. 필터 선택 후 셀 값 유지되는지 확인
+private void gridMerged_CellFormatting(object sender, DataGridViewCellFormattingEventArgs e)
+{
+    if (e.RowIndex < 0)
+        return;
 
-현재 증상 기준으로는 2번 CellFormatting 이벤트 누락이 제일 유력함.
+    if (e.ColumnIndex < 0 || e.ColumnIndex >= gridMerged.Columns.Count)
+        return;
 
-메모리 700MB는 일단 viewRows 제거로 일부 줄어야 함.
-그래도 크게 남으면 다음 원인은 rows + allMergedRows + searchMergedRows + mergedRows 중복 보관이고, 그건 다음 단계에서 searchMergedRows/mergedRows 중복을 줄여야 함.
+    DataGridViewColumn col = gridMerged.Columns[e.ColumnIndex];
+
+    if (col == null)
+        return;
+
+    if (!col.Name.StartsWith("colExtra_", StringComparison.OrdinalIgnoreCase))
+        return;
+
+    CombinedRow row = gridMerged.Rows[e.RowIndex].DataBoundItem as CombinedRow;
+
+    if (row == null)
+    {
+        e.Value = "";
+        e.FormattingApplied = true;
+        return;
+    }
+
+    string dynamicKey = "";
+    int dynamicIndex = -1;
+
+    if (col.Tag is ValueTuple<string, int> tagTuple)
+    {
+        dynamicKey = tagTuple.Item1;
+        dynamicIndex = tagTuple.Item2;
+    }
+    else
+    {
+        TryParseDynamicColumnName(col.Name, out dynamicKey, out dynamicIndex);
+    }
+
+    if (string.IsNullOrWhiteSpace(dynamicKey) || dynamicIndex < 0)
+    {
+        e.Value = "";
+        e.FormattingApplied = true;
+        return;
+    }
+
+    string value = GetDynamicValueInRowRange(row, dynamicKey, dynamicIndex);
+
+    e.Value = value ?? "";
+    e.FormattingApplied = true;
+}
+
+
+---
+
+8. 생성자에 이벤트 연결 추가
+
+생성자에서 gridMerged 이벤트 연결하는 부분에 추가.
+
+gridMerged.CellFormatting -= gridMerged_CellFormatting;
+gridMerged.CellFormatting += gridMerged_CellFormatting;
+
+예상 위치:
+
+gridMerged.MouseDown += Mer_Dgv_MouseDown;
+gridMerged.CellDoubleClick += GridMerged_CellDoubleClick;
+gridMerged.ColumnHeaderMouseClick += gridMerged_ColumnHeaderMouseClick;
+
+gridMerged.CellFormatting -= gridMerged_CellFormatting;
+gridMerged.CellFormatting += gridMerged_CellFormatting;
+
+
+---
+
+1단계 적용 후 확인할 것
+
+1. 빌드 에러 여부
+2. 파일 로딩 후 메모리 사용량
+3. LOT 값이 기존 table.json 규칙대로 맞는지
+4. BR 검색 시 LOT 뒤 table.json 컬럼이 뜨는지
+5. 그리드 셀에 값이 표시되는지
+6. 컬럼 헤더 필터가 살아있는지
+7. STEP_3 / STEP_5 값이 표시되는지
+
+이번 1단계에서 가장 중요한 변화는 이거임.
+
+이전:
+rows + viewRows + allMergedRows + searchMergedRows + mergedRows 계속 보관
+
+수정 후:
+로딩 후 rows/viewRows 제거
+allMergedRows + 현재 표시/필터용 리스트만 유지
+
+적용 결과 알려주면 다음 단계에서 searchMergedRows/mergedRows 중복까지 줄이는 쪽으로 이어가면 됨.
