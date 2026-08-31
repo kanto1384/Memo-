@@ -1,581 +1,212 @@
-맞다. 지금은 표시 10,000건 제한이 핵심이 아님.
-먼저 해야 할 건 로드 후에도 rows/viewRows를 계속 들고 있는 구조를 끊는 것임.
+9s 동안 처리함
 
-현재 기존 흐름은 ParseFileAsync(file)로 전체 rows를 만들고, BuildKVIndexForFile(file)까지 호출한 뒤 ApplyFilterAndBind()에서 다시 viewRows, allMergedRows를 만드는 구조임.
-또 table.json의 BIZ_KEY_RULES는 bizKeyRules에 로드되고 있음. extraKeyRules가 아니라 bizKeyRules를 써야 함. 
+1. Node.js 설치 여부 확인
 
-이번 답변은 1단계만 준다.
-목표는 이거임.
+Windows에서 PowerShell 또는 명령 프롬프트를 열고 실행:
 
-1단계 목표:
-- 컬럼 헤더 필터 유지
-- LOT 표시 유지
-- table.json 동적 컬럼 표시 유지
-- STEP_3 / STEP_5 범위 표시 유지
-- 로딩 완료 후 rows/viewRows 메모리 제거
+node -v
+npm -v
+
+정상 예시:
+
+v24.x.x
+11.x.x
+
+둘 다 버전이 표시되면 Node.js 설치는 완료된 상태입니다.
+
+다음과 같이 나오면 설치가 필요합니다.
+
+'node'은(는) 내부 또는 외부 명령...
+
+또는:
+
+node : 'node' 용어가 인식되지 않습니다.
 
 
 ---
 
-1. BuildKVIndexForFile(string file) 전체 교체
+2. Node.js 설치
 
-private void BuildKVIndexForFile(string file)
-{
-    // 메모리 절감 버전:
-    // 모든 Key/Value를 저장하지 않고,
-    // LOT 규칙 Key + table.json BIZ_KEY_RULES Key만 저장한다.
+Node.js 공식 다운로드에서 LTS 버전을 받습니다.
 
-    string source = Path.GetFileName(file);
+Windows 기준:
 
-    var fileMap = new Dictionary<int, Dictionary<string, Dictionary<int, string>>>();
-    var lotMap = new Dictionary<int, string>();
+Windows Installer (.msi)
 
-    int currentHeaderIdx = -1;
-    string currentVarName = "";
-    Dictionary<string, Dictionary<int, string>> currentPairs = null;
+일반적인 PC라면 x64
 
-    var kvRx = new Regex(
-        @"^\s*\[(?<idx>\d+)\s*:\s*(?<key>[^\]]+)\]\s*:\s*(?<val>.*)$",
-        RegexOptions.Compiled | RegexOptions.IgnoreCase
-    );
+설치 옵션은 전부 기본값
 
-    Action flushBlock = () =>
-    {
-        if (currentHeaderIdx < 0)
-            return;
+Add to PATH 옵션 유지
 
-        if (currentPairs == null || currentPairs.Count == 0)
-            return;
+설치 완료 후 열려 있던 PowerShell과 VS Code를 모두 종료했다가 다시 실행
 
-        fileMap[currentHeaderIdx] = currentPairs;
 
-        string lot = PickLotFromPairs(currentVarName, currentPairs);
+React 공부 목적이면 Current가 아니라 안정적인 LTS를 사용하면 됩니다. Node.js도 실제 프로젝트에는 LTS 사용을 권장합니다. Node.js 릴리스 정책
 
-        if (!string.IsNullOrWhiteSpace(lot))
-            lotMap[currentHeaderIdx] = lot;
-    };
+명령어로 설치하는 방법
 
-    int lineIndex = -1;
+winget을 사용할 수 있다면 PowerShell에서:
 
-    using (var fs = new FileStream(
-        file,
-        FileMode.Open,
-        FileAccess.Read,
-        FileShare.ReadWrite | FileShare.Delete))
-    using (var sr = new StreamReader(fs, Encoding.UTF8, true, 1024 * 64))
-    {
-        string line;
+winget install OpenJS.NodeJS.LTS
 
-        while ((line = sr.ReadLine()) != null)
-        {
-            lineIndex++;
+설치 완료 후 PowerShell을 새로 실행합니다.
 
-            var hm = headRx.Match(line);
 
-            if (hm.Success)
-            {
-                flushBlock();
+---
 
-                currentHeaderIdx = lineIndex;
-                currentPairs = null;
-                currentVarName = "";
+3. 설치 재확인
 
-                string rest = hm.Groups["rest"].Value;
-                currentVarName = GetVarFromHeader(source, rest);
+새 PowerShell에서:
 
-                if (string.IsNullOrWhiteSpace(currentVarName) ||
-                    !currentVarName.StartsWith("BR_", StringComparison.OrdinalIgnoreCase))
-                {
-                    continue;
-                }
+node -v
+npm -v
+npx -v
 
-                currentPairs = new Dictionary<string, Dictionary<int, string>>(
-                    StringComparer.OrdinalIgnoreCase
-                );
+모두 버전이 나오면 정상입니다.
 
-                continue;
-            }
+Node.js 설치 경로 확인:
 
-            if (currentHeaderIdx < 0)
-                continue;
+where.exe node
+where.exe npm
 
-            if (currentPairs == null)
-                continue;
+일반적인 결과:
 
-            var kv = kvRx.Match(line);
+C:\Program Files\nodejs\node.exe
+C:\Program Files\nodejs\npm
+C:\Program Files\nodejs\npm.cmd
 
-            if (!kv.Success)
-                continue;
 
-            int idx;
-            if (!int.TryParse(kv.Groups["idx"].Value, out idx))
-                idx = 0;
+---
 
-            string key = kv.Groups["key"].Value.Trim();
-            string val = kv.Groups["val"].Value.Trim();
+4. 작업 폴더 생성
 
-            if (string.IsNullOrWhiteSpace(key))
-                continue;
+예시로 C:\ReactStudy 폴더를 사용합니다.
 
-            if (!ShouldKeepKvKeyForBiz(currentVarName, key))
-                continue;
+mkdir C:\ReactStudy
+cd C:\ReactStudy
 
-            if (!currentPairs.TryGetValue(key, out var byIndex))
-            {
-                byIndex = new Dictionary<int, string>();
-                currentPairs[key] = byIndex;
-            }
 
-            byIndex[idx] = val;
-        }
-    }
+---
 
-    flushBlock();
+5. React 프로젝트 생성
 
-    lock (locker)
-    {
-        kvIndexByFile[source] = fileMap;
-        lotIndexByFile[source] = lotMap;
-    }
+Vite 기반 React 프로젝트를 생성합니다.
+
+npm create vite@latest react-study -- --template react
+
+프로젝트 폴더로 이동:
+
+cd react-study
+
+필요한 패키지 설치:
+
+npm install
+
+개발 서버 실행:
+
+npm run dev
+
+정상적으로 실행되면 다음과 비슷하게 표시됩니다.
+
+Local: http://localhost:5173/
+
+브라우저에서 접속:
+
+http://localhost:5173
+
+Vite 기본 화면이 나오면 React 실행 환경이 완성된 것입니다.
+
+
+---
+
+6. VS Code에서 프로젝트 열기
+
+VS Code가 설치되어 있다면 프로젝트 폴더에서:
+
+code .
+
+code 명령을 인식하지 못하면 VS Code에서 직접 엽니다.
+
+1. VS Code 실행
+
+
+2. 파일
+
+
+3. 폴더 열기
+
+
+4. C:\ReactStudy\react-study 선택
+
+
+
+
+---
+
+7. 첫 화면 수정 테스트
+
+VS Code에서 다음 파일을 엽니다.
+
+src\App.jsx
+
+App.jsx 내용을 전부 지우고 아래 코드로 교체합니다.
+
+function App() {
+  return (
+    <div>
+      <h1>React 공부 시작</h1>
+      <p>정상적으로 실행되었습니다.</p>
+    </div>
+  );
 }
 
+export default App;
 
----
-
-2. 새 메서드 추가
-
-위치
-
-PickLotFromPairs(...) 바로 아래에 추가.
-
-private bool ShouldKeepKvKeyForBiz(string varName, string key)
-{
-    if (string.IsNullOrWhiteSpace(key))
-        return false;
-
-    var targetKeys = new List<string>();
-
-    // 1) table.json LOT_KEY_RULES
-    if (!string.IsNullOrWhiteSpace(varName) &&
-        lotKeyRules != null &&
-        lotKeyRules.TryGetValue(varName, out var lotRuleKeys) &&
-        lotRuleKeys != null)
-    {
-        targetKeys.AddRange(lotRuleKeys);
-    }
-
-    // 2) table.json DEFAULT_LOT_KEYS
-    if (defaultLotKeys != null)
-        targetKeys.AddRange(defaultLotKeys);
-
-    // 3) 안전 기본 LOT 후보
-    targetKeys.AddRange(new[]
-    {
-        "OUT_LOTID",
-        "INPUT_LOTID",
-        "INPUT_CSTID",
-        "PROD_LOTID",
-        "LOTID",
-        "LOT_ID",
-        "CSTID"
-    });
-
-    // 4) table.json BIZ_KEY_RULES
-    // 중요: extraKeyRules 아님. LoadRules()에서 bizKeyRules에 들어간다.
-    if (!string.IsNullOrWhiteSpace(varName) &&
-        bizKeyRules != null &&
-        bizKeyRules.TryGetValue(varName, out var bizKeys) &&
-        bizKeys != null)
-    {
-        targetKeys.AddRange(bizKeys);
-    }
-
-    return targetKeys
-        .Where(x => !string.IsNullOrWhiteSpace(x))
-        .Distinct(StringComparer.OrdinalIgnoreCase)
-        .Any(x => string.Equals(x, key, StringComparison.OrdinalIgnoreCase));
-}
+파일을 저장하면 브라우저 화면이 자동으로 변경됩니다.
 
 
 ---
 
-3. FillLotByIndex(CombinedRow row) 전체 교체
+8. 개발 서버 종료 및 재실행
 
-LOT이 엉뚱하게 잡히는 문제 때문에 SuccessIdx만 보지 말고 StartIdx~EndIdx 범위도 fallback으로 보게 수정한다.
+서버 종료:
 
-private void FillLotByIndex(CombinedRow row)
-{
-    if (row == null)
-        return;
+Ctrl + C
 
-    if (!string.IsNullOrWhiteSpace(row.MLot))
-        return;
+다음에 다시 실행할 때:
 
-    if (string.IsNullOrWhiteSpace(row.SourceFile))
-        return;
+cd C:\ReactStudy\react-study
+npm run dev
 
-    if (!kvIndexByFile.TryGetValue(row.SourceFile, out var fileMap) || fileMap == null)
-        return;
-
-    // 1순위: SuccessIdx 블록
-    if (row.SuccessIdx >= 0)
-    {
-        if (lotIndexByFile.TryGetValue(row.SourceFile, out var lotMap) &&
-            lotMap != null &&
-            lotMap.TryGetValue(row.SuccessIdx, out var lot) &&
-            !string.IsNullOrWhiteSpace(lot))
-        {
-            row.MLot = lot;
-            return;
-        }
-
-        if (fileMap.TryGetValue(row.SuccessIdx, out var successPairs) &&
-            successPairs != null)
-        {
-            string lot = PickLotFromPairs(row.Var, successPairs);
-
-            if (!string.IsNullOrWhiteSpace(lot))
-            {
-                row.MLot = lot;
-                return;
-            }
-        }
-    }
-
-    // 2순위: StartIdx~EndIdx 범위에서 아래쪽 블록 우선
-    // STEP_5가 STEP_3보다 아래면 STEP_5 LOT이 우선됨.
-    int start = row.StartIdx;
-    int end = row.EndIdx;
-
-    if (start < 0 && row.SuccessIdx >= 0)
-        start = row.SuccessIdx;
-
-    if (end < 0 && row.SuccessIdx >= 0)
-        end = row.SuccessIdx;
-
-    if (start < 0 || end < 0)
-        return;
-
-    if (start > end)
-    {
-        int temp = start;
-        start = end;
-        end = temp;
-    }
-
-    foreach (var block in fileMap
-        .Where(x => x.Key >= start && x.Key <= end)
-        .OrderByDescending(x => x.Key))
-    {
-        string lot = PickLotFromPairs(row.Var, block.Value);
-
-        if (!string.IsNullOrWhiteSpace(lot))
-        {
-            row.MLot = lot;
-            return;
-        }
-    }
-}
+npm install은 프로젝트를 처음 받았거나 패키지가 변경됐을 때만 다시 실행하면 됩니다.
 
 
 ---
 
-4. FillLotIfPossible(CombinedRow row) 전체 교체
+PowerShell에서 npm 실행 오류가 날 때
 
-private void FillLotIfPossible(CombinedRow row)
-{
-    FillLotByIndex(row);
-}
+다음 오류가 나올 수 있습니다.
 
+npm.ps1 파일을 로드할 수 없습니다.
+스크립트 실행이 비활성화되어 있습니다.
 
----
+가장 간단한 방법은 PowerShell 대신 **명령 프롬프트(cmd)**에서 동일한 명령을 실행하는 것입니다.
 
-5. LoadOneFileAsync(string file) 전체 교체
+PowerShell을 계속 사용하려면 현재 사용자 범위만 변경:
 
-이게 이번 1단계의 핵심임.
-rows는 결합 생성까지만 쓰고, 로딩 완료 후 비운다.
+Set-ExecutionPolicy -Scope CurrentUser RemoteSigned
 
-private async Task LoadOneFileAsync(string file)
-{
-    SetBusy("파일 읽는 중…", true);
+확인 질문이 나오면:
 
-    try
-    {
-        txtSearchVar.Text = _BizS;
-        txtSearchVar.ForeColor = Color.Gray;
-        txtSearchVar.Items.Clear();
+Y
 
-        isSearchComboInitialized = false;
-        activeFilters.Clear();
+그다음 PowerShell을 다시 열고 확인:
 
-        lock (locker)
-        {
-            rows.Clear();
-            viewRows.Clear();
+npm -v
 
-            kvIndexByFile.Clear();
-            lotIndexByFile.Clear();
+최종적으로 아래 세 가지가 되면 환경 구성이 끝난 것입니다.
 
-            allMergedRows.Clear();
-            if (searchMergedRows != null)
-                searchMergedRows.Clear();
-
-            mergedRows.Clear();
-        }
-
-        await Task.Run(async () =>
-        {
-            await ParseFileAsync(file);
-        });
-
-        int parsedLineCount = rows.Count;
-
-        List<CombinedRow> builtMergedRows = null;
-
-        await Task.Run(() =>
-        {
-            // 전체 Key/Value 저장이 아니라 필요한 Key만 저장하는 BuildKVIndexForFile
-            BuildKVIndexForFile(file);
-
-            IEnumerable<LogRow> forMerged = rows.AsEnumerable();
-
-            if (chkBROnly.Checked)
-            {
-                forMerged = forMerged.Where(r =>
-                    (r.Var ?? "").StartsWith("BR_", StringComparison.OrdinalIgnoreCase));
-            }
-
-            builtMergedRows = BuildMergedQueue(
-                forMerged
-                    .OrderBy(r => r.SourceFile, StringComparer.OrdinalIgnoreCase)
-                    .ThenBy(r => r.LineIndex)
-            );
-        });
-
-        allMergedRows = builtMergedRows ?? new List<CombinedRow>();
-
-        // 콤보박스 BR 목록 생성
-        var mVarValues = allMergedRows
-            .Select(r => r.Var)
-            .Where(v =>
-                !string.IsNullOrWhiteSpace(v) &&
-                v.StartsWith("BR_", StringComparison.OrdinalIgnoreCase))
-            .Distinct(StringComparer.OrdinalIgnoreCase)
-            .OrderBy(v => v, StringComparer.OrdinalIgnoreCase)
-            .ToList();
-
-        foreach (var val in mVarValues)
-        {
-            if (!txtSearchVar.Items.Contains(val))
-                txtSearchVar.Items.Add(val);
-        }
-
-        isSearchComboInitialized = true;
-
-        // 핵심:
-        // 결합 보기에서는 rows/viewRows를 계속 들고 있을 필요가 없음.
-        rows.Clear();
-        rows.TrimExcess();
-
-        viewRows.Clear();
-        viewRows.TrimExcess();
-
-        bsLines.DataSource = null;
-
-        searchMergedRows = null;
-
-        // allMergedRows 기준으로 화면 표시/필터/동적컬럼 구성
-        ApplyMergedView(true, true);
-
-        GC.Collect();
-        GC.WaitForPendingFinalizers();
-        GC.Collect();
-
-        statusLabel.Text =
-            $"완료: {Path.GetFileName(file)} / 라인 {parsedLineCount:N0} / 결합 {allMergedRows.Count:N0}건";
-
-        UpdateStatusLabel();
-    }
-    catch (Exception ex)
-    {
-        statusLabel.Text = "오류 발생";
-        MessageBox.Show(ex.ToString(), "오류", MessageBoxButtons.OK, MessageBoxIcon.Error);
-    }
-    finally
-    {
-        SetBusy(statusLabel.Text, false);
-    }
-}
-
-
----
-
-6. ApplyFilterAndBind() 전체 교체
-
-검색 버튼이나 필터 초기화에서 이 메서드가 호출돼도, rows가 비어 있으면 allMergedRows 기준으로만 동작하게 만든다.
-
-private void ApplyFilterAndBind()
-{
-    // rows가 비어 있으면 이미 경량 로딩 완료 상태.
-    // 이때는 allMergedRows 기준으로만 다시 표시한다.
-    if (rows == null || rows.Count == 0)
-    {
-        ApplyMergedView(true, true);
-        ToggleMode();
-        UpdateStatusLabel();
-        return;
-    }
-
-    // =========================
-    // 1. 라인 보기 처리
-    // =========================
-    if (!chkCombine.Checked)
-    {
-        IEnumerable<LogRow> q = rows;
-
-        if (chkBROnly.Checked)
-        {
-            q = q.Where(r =>
-                (r.Var ?? string.Empty).StartsWith("BR_", StringComparison.OrdinalIgnoreCase));
-        }
-
-        q = FilterBySearch(q);
-
-        viewRows = q
-            .OrderBy(r => r.SourceFile, StringComparer.OrdinalIgnoreCase)
-            .ThenBy(r => r.LineIndex)
-            .ToList();
-
-        BindLines(viewRows);
-    }
-    else
-    {
-        viewRows.Clear();
-        viewRows.TrimExcess();
-
-        bsLines.DataSource = null;
-    }
-
-    // =========================
-    // 2. 결합 보기 원본 생성
-    // =========================
-    IEnumerable<LogRow> forMerged = rows.AsEnumerable();
-
-    if (chkBROnly.Checked)
-    {
-        forMerged = forMerged.Where(r =>
-            (r.Var ?? "").StartsWith("BR_", StringComparison.OrdinalIgnoreCase));
-    }
-
-    allMergedRows = BuildMergedQueue(
-        forMerged
-            .OrderBy(r => r.SourceFile, StringComparer.OrdinalIgnoreCase)
-            .ThenBy(r => r.LineIndex)
-    );
-
-    ApplyMergedView(true, true);
-
-    ToggleMode();
-    UpdateStatusLabel();
-}
-
-
----
-
-7. gridMerged_CellFormatting(...) 전체 교체
-
-table.json 컬럼이 필터에는 뜨는데 그리드에는 안 뜨는 문제는 이 메서드가 없거나 이벤트 연결이 안 된 경우가 가장 큼.
-
-private void gridMerged_CellFormatting(object sender, DataGridViewCellFormattingEventArgs e)
-{
-    if (e.RowIndex < 0)
-        return;
-
-    if (e.ColumnIndex < 0 || e.ColumnIndex >= gridMerged.Columns.Count)
-        return;
-
-    DataGridViewColumn col = gridMerged.Columns[e.ColumnIndex];
-
-    if (col == null)
-        return;
-
-    if (!col.Name.StartsWith("colExtra_", StringComparison.OrdinalIgnoreCase))
-        return;
-
-    CombinedRow row = gridMerged.Rows[e.RowIndex].DataBoundItem as CombinedRow;
-
-    if (row == null)
-    {
-        e.Value = "";
-        e.FormattingApplied = true;
-        return;
-    }
-
-    string dynamicKey = "";
-    int dynamicIndex = -1;
-
-    if (col.Tag is ValueTuple<string, int> tagTuple)
-    {
-        dynamicKey = tagTuple.Item1;
-        dynamicIndex = tagTuple.Item2;
-    }
-    else
-    {
-        TryParseDynamicColumnName(col.Name, out dynamicKey, out dynamicIndex);
-    }
-
-    if (string.IsNullOrWhiteSpace(dynamicKey) || dynamicIndex < 0)
-    {
-        e.Value = "";
-        e.FormattingApplied = true;
-        return;
-    }
-
-    string value = GetDynamicValueInRowRange(row, dynamicKey, dynamicIndex);
-
-    e.Value = value ?? "";
-    e.FormattingApplied = true;
-}
-
-
----
-
-8. 생성자에 이벤트 연결 추가
-
-생성자에서 gridMerged 이벤트 연결하는 부분에 추가.
-
-gridMerged.CellFormatting -= gridMerged_CellFormatting;
-gridMerged.CellFormatting += gridMerged_CellFormatting;
-
-예상 위치:
-
-gridMerged.MouseDown += Mer_Dgv_MouseDown;
-gridMerged.CellDoubleClick += GridMerged_CellDoubleClick;
-gridMerged.ColumnHeaderMouseClick += gridMerged_ColumnHeaderMouseClick;
-
-gridMerged.CellFormatting -= gridMerged_CellFormatting;
-gridMerged.CellFormatting += gridMerged_CellFormatting;
-
-
----
-
-1단계 적용 후 확인할 것
-
-1. 빌드 에러 여부
-2. 파일 로딩 후 메모리 사용량
-3. LOT 값이 기존 table.json 규칙대로 맞는지
-4. BR 검색 시 LOT 뒤 table.json 컬럼이 뜨는지
-5. 그리드 셀에 값이 표시되는지
-6. 컬럼 헤더 필터가 살아있는지
-7. STEP_3 / STEP_5 값이 표시되는지
-
-이번 1단계에서 가장 중요한 변화는 이거임.
-
-이전:
-rows + viewRows + allMergedRows + searchMergedRows + mergedRows 계속 보관
-
-수정 후:
-로딩 후 rows/viewRows 제거
-allMergedRows + 현재 표시/필터용 리스트만 유지
-
-적용 결과 알려주면 다음 단계에서 searchMergedRows/mergedRows 중복까지 줄이는 쪽으로 이어가면 됨.
+node -v
+npm -v
+npm run dev
