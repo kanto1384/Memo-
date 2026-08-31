@@ -1,212 +1,102 @@
-9s 동안 처리함
+그 방향이 더 좋습니다. React 기능 모음집(React Playground) 형태로 만들면 됩니다.
 
-1. Node.js 설치 여부 확인
+기능 하나당 예제 화면 하나를 두고, 필요할 때 코드를 복사해서 쓰는 개인 참고 프로젝트입니다.
 
-Windows에서 PowerShell 또는 명령 프롬프트를 열고 실행:
+추천 구성
 
-node -v
-npm -v
+React 기능 모음집
+├─ 기본 기능
+│  ├─ State 변경
+│  ├─ 조건부 화면
+│  └─ 반복 목록
+├─ 입력 컴포넌트
+│  ├─ TextBox
+│  ├─ Select
+│  ├─ Checkbox
+│  └─ 날짜 선택
+├─ UI 컴포넌트
+│  ├─ Modal
+│  ├─ Toast 알림
+│  ├─ Tabs
+│  └─ Accordion
+├─ 데이터
+│  ├─ 검색과 필터
+│  ├─ 정렬
+│  ├─ Paging
+│  └─ Table
+├─ 브라우저 기능
+│  ├─ localStorage
+│  ├─ 파일 열기
+│  ├─ 클립보드 복사
+│  └─ 다운로드
+└─ 서버 통신
+   ├─ GET
+   ├─ POST
+   ├─ 로딩 표시
+   └─ 오류 처리
 
-정상 예시:
+실제 화면 형태
 
-v24.x.x
-11.x.x
+왼쪽에 기능 메뉴를 두고 오른쪽에 예제를 표시합니다.
 
-둘 다 버전이 표시되면 Node.js 설치는 완료된 상태입니다.
+┌──────────────┬─────────────────────────┐
+│ 기본 기능    │ 검색 및 필터 예제       │
+│ 입력         │                         │
+│ UI           │ [검색어 입력          ] │
+│ 데이터       │                         │
+│ 브라우저     │ 결과 목록               │
+│ 서버 통신    │                         │
+└──────────────┴─────────────────────────┘
 
-다음과 같이 나오면 설치가 필요합니다.
+각 예제는 다음 3개가 같이 보이게 만들면 두고두고 쓰기 좋습니다.
 
-'node'은(는) 내부 또는 외부 명령...
+실행 결과
 
-또는:
+핵심 설명
 
-node : 'node' 용어가 인식되지 않습니다.
-
-
----
-
-2. Node.js 설치
-
-Node.js 공식 다운로드에서 LTS 버전을 받습니다.
-
-Windows 기준:
-
-Windows Installer (.msi)
-
-일반적인 PC라면 x64
-
-설치 옵션은 전부 기본값
-
-Add to PATH 옵션 유지
-
-설치 완료 후 열려 있던 PowerShell과 VS Code를 모두 종료했다가 다시 실행
-
-
-React 공부 목적이면 Current가 아니라 안정적인 LTS를 사용하면 됩니다. Node.js도 실제 프로젝트에는 LTS 사용을 권장합니다. Node.js 릴리스 정책
-
-명령어로 설치하는 방법
-
-winget을 사용할 수 있다면 PowerShell에서:
-
-winget install OpenJS.NodeJS.LTS
-
-설치 완료 후 PowerShell을 새로 실행합니다.
-
-
----
-
-3. 설치 재확인
-
-새 PowerShell에서:
-
-node -v
-npm -v
-npx -v
-
-모두 버전이 나오면 정상입니다.
-
-Node.js 설치 경로 확인:
-
-where.exe node
-where.exe npm
-
-일반적인 결과:
-
-C:\Program Files\nodejs\node.exe
-C:\Program Files\nodejs\npm
-C:\Program Files\nodejs\npm.cmd
+복사할 수 있는 예제 코드
 
 
----
+처음 만들 기능 순서
 
-4. 작업 폴더 생성
-
-예시로 C:\ReactStudy 폴더를 사용합니다.
-
-mkdir C:\ReactStudy
-cd C:\ReactStudy
+1. 카운터: useState
 
 
----
+2. 입력값 실시간 표시
 
-5. React 프로젝트 생성
 
-Vite 기반 React 프로젝트를 생성합니다.
+3. 배열 목록 추가·삭제
 
-npm create vite@latest react-study -- --template react
 
-프로젝트 폴더로 이동:
+4. 검색 및 필터
 
-cd react-study
 
-필요한 패키지 설치:
+5. Modal 팝업
 
+
+6. Toast 알림
+
+
+7. Table 정렬
+
+
+8. localStorage 저장
+
+
+9. API 호출
+
+
+10. 파일 불러오기
+
+
+
+처음부터 전부 만들 필요는 없습니다. 새로운 기능을 배울 때마다 메뉴와 예제 하나씩 추가하면 됩니다.
+
+프로젝트 이름도 현재 react-study를 그대로 사용해도 되고, 목적에 맞게 새로 만든다면:
+
+npm create vite@latest react-playground -- --template react
+cd react-playground
 npm install
-
-개발 서버 실행:
-
 npm run dev
 
-정상적으로 실행되면 다음과 비슷하게 표시됩니다.
-
-Local: http://localhost:5173/
-
-브라우저에서 접속:
-
-http://localhost:5173
-
-Vite 기본 화면이 나오면 React 실행 환경이 완성된 것입니다.
-
-
----
-
-6. VS Code에서 프로젝트 열기
-
-VS Code가 설치되어 있다면 프로젝트 폴더에서:
-
-code .
-
-code 명령을 인식하지 못하면 VS Code에서 직접 엽니다.
-
-1. VS Code 실행
-
-
-2. 파일
-
-
-3. 폴더 열기
-
-
-4. C:\ReactStudy\react-study 선택
-
-
-
-
----
-
-7. 첫 화면 수정 테스트
-
-VS Code에서 다음 파일을 엽니다.
-
-src\App.jsx
-
-App.jsx 내용을 전부 지우고 아래 코드로 교체합니다.
-
-function App() {
-  return (
-    <div>
-      <h1>React 공부 시작</h1>
-      <p>정상적으로 실행되었습니다.</p>
-    </div>
-  );
-}
-
-export default App;
-
-파일을 저장하면 브라우저 화면이 자동으로 변경됩니다.
-
-
----
-
-8. 개발 서버 종료 및 재실행
-
-서버 종료:
-
-Ctrl + C
-
-다음에 다시 실행할 때:
-
-cd C:\ReactStudy\react-study
-npm run dev
-
-npm install은 프로젝트를 처음 받았거나 패키지가 변경됐을 때만 다시 실행하면 됩니다.
-
-
----
-
-PowerShell에서 npm 실행 오류가 날 때
-
-다음 오류가 나올 수 있습니다.
-
-npm.ps1 파일을 로드할 수 없습니다.
-스크립트 실행이 비활성화되어 있습니다.
-
-가장 간단한 방법은 PowerShell 대신 **명령 프롬프트(cmd)**에서 동일한 명령을 실행하는 것입니다.
-
-PowerShell을 계속 사용하려면 현재 사용자 범위만 변경:
-
-Set-ExecutionPolicy -Scope CurrentUser RemoteSigned
-
-확인 질문이 나오면:
-
-Y
-
-그다음 PowerShell을 다시 열고 확인:
-
-npm -v
-
-최종적으로 아래 세 가지가 되면 환경 구성이 끝난 것입니다.
-
-node -v
-npm -v
-npm run dev
+우선 현재 프로젝트에서 왼쪽 메뉴 + 첫 번째 useState 카운터 예제부터 만들면 적당합니다. 이후에는 파일 전체 교체 방식으로 한 기능씩 추가하면 됩니다.
