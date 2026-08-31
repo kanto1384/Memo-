@@ -1,102 +1,125 @@
-그 방향이 더 좋습니다. React 기능 모음집(React Playground) 형태로 만들면 됩니다.
+12s 동안 처리함
 
-기능 하나당 예제 화면 하나를 두고, 필요할 때 코드를 복사해서 쓰는 개인 참고 프로젝트입니다.
+지금 막히는 핵심은 이것입니다.
 
-추천 구성
+<a href="./Action.jsx">이동</a>
 
-React 기능 모음집
-├─ 기본 기능
-│  ├─ State 변경
-│  ├─ 조건부 화면
-│  └─ 반복 목록
-├─ 입력 컴포넌트
-│  ├─ TextBox
-│  ├─ Select
-│  ├─ Checkbox
-│  └─ 날짜 선택
-├─ UI 컴포넌트
-│  ├─ Modal
-│  ├─ Toast 알림
-│  ├─ Tabs
-│  └─ Accordion
-├─ 데이터
-│  ├─ 검색과 필터
-│  ├─ 정렬
-│  ├─ Paging
-│  └─ Table
-├─ 브라우저 기능
-│  ├─ localStorage
-│  ├─ 파일 열기
-│  ├─ 클립보드 복사
-│  └─ 다운로드
-└─ 서버 통신
-   ├─ GET
-   ├─ POST
-   ├─ 로딩 표시
-   └─ 오류 처리
+이 방식으로는 안 됩니다. Action.jsx는 웹페이지가 아니라 App.jsx가 불러와서 사용하는 컴포넌트 파일입니다.
 
-실제 화면 형태
+React Router는 아직 쓰지 말고, 버튼으로 화면을 전환하는 것부터 연습하는 게 좋습니다.
 
-왼쪽에 기능 메뉴를 두고 오른쪽에 예제를 표시합니다.
+1. src/Action.jsx 새로 만들기
 
-┌──────────────┬─────────────────────────┐
-│ 기본 기능    │ 검색 및 필터 예제       │
-│ 입력         │                         │
-│ UI           │ [검색어 입력          ] │
-│ 데이터       │                         │
-│ 브라우저     │ 결과 목록               │
-│ 서버 통신    │                         │
-└──────────────┴─────────────────────────┘
+function Action({ onBack }) {
+  return (
+    <div className="page">
+      <h1>Action 화면</h1>
+      <p>App.jsx에서 Action.jsx로 넘어왔습니다.</p>
 
-각 예제는 다음 3개가 같이 보이게 만들면 두고두고 쓰기 좋습니다.
+      <button onClick={onBack}>
+        이전 화면
+      </button>
+    </div>
+  );
+}
 
-실행 결과
+export default Action;
 
-핵심 설명
+2. src/App.jsx 전체 교체
 
-복사할 수 있는 예제 코드
+import { useState } from "react";
+import Action from "./Action.jsx";
+import "./App.css";
 
+function App() {
+  const [currentPage, setCurrentPage] = useState("main");
 
-처음 만들 기능 순서
+  if (currentPage === "action") {
+    return (
+      <Action
+        onBack={() => setCurrentPage("main")}
+      />
+    );
+  }
 
-1. 카운터: useState
+  return (
+    <div className="page">
+      <h1>메인 화면</h1>
+      <p>버튼을 누르면 Action 컴포넌트를 표시합니다.</p>
 
+      <button onClick={() => setCurrentPage("action")}>
+        Action 화면으로 이동
+      </button>
+    </div>
+  );
+}
 
-2. 입력값 실시간 표시
+export default App;
 
+3. src/App.css 전체 교체
 
-3. 배열 목록 추가·삭제
+body {
+  margin: 0;
+  background-color: #f1f3f5;
+  font-family: Arial, sans-serif;
+}
 
+.page {
+  width: 500px;
+  margin: 100px auto;
+  padding: 30px;
 
-4. 검색 및 필터
+  background-color: white;
+  border: 1px solid #dddddd;
+  border-radius: 12px;
 
+  text-align: center;
+}
 
-5. Modal 팝업
+.page h1 {
+  color: #222222;
+}
 
+.page p {
+  color: #666666;
+}
 
-6. Toast 알림
+.page button {
+  padding: 10px 20px;
 
+  color: white;
+  background-color: #1971c2;
 
-7. Table 정렬
+  border: none;
+  border-radius: 6px;
+  cursor: pointer;
+}
 
+.page button:hover {
+  background-color: #1864ab;
+}
 
-8. localStorage 저장
+작동 구조
 
+App.jsx
+ ├─ currentPage가 "main"   → 메인 화면 표시
+ └─ currentPage가 "action" → Action.jsx 표시
 
-9. API 호출
+CSS는 이 한 줄로 연결됩니다.
 
+import "./App.css";
 
-10. 파일 불러오기
+그리고 JSX에서 CSS 선택자를 적용합니다.
 
+<div className="page">
 
+.page {
+  background-color: white;
+}
 
-처음부터 전부 만들 필요는 없습니다. 새로운 기능을 배울 때마다 메뉴와 예제 하나씩 추가하면 됩니다.
+파일명 대소문자도 동일해야 합니다.
 
-프로젝트 이름도 현재 react-study를 그대로 사용해도 되고, 목적에 맞게 새로 만든다면:
+Action.jsx
+import Action from "./Action.jsx";
 
-npm create vite@latest react-playground -- --template react
-cd react-playground
-npm install
-npm run dev
-
-우선 현재 프로젝트에서 왼쪽 메뉴 + 첫 번째 useState 카운터 예제부터 만들면 적당합니다. 이후에는 파일 전체 교체 방식으로 한 기능씩 추가하면 됩니다.
+지금은 React Router, 외부 CSS, CodePen 예제를 건드리지 말고 이 세 파일만 수정하면서 익히는 게 가장 빠릅니다.
