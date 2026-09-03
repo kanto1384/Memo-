@@ -1,0 +1,96 @@
+
+현재 구조는 ParseFileAsync()에서 LineIndex를 실제 파일 라인 번호로 저장하고 있음. 그래서 라인 번호 자체는 맞음. 
+그런데 BuildMergedQueue()에서 Fail이면 EndIdx = Fail 헤더 라인으로 잡고 있음. 
+문제는 ReadBlockRange()가 current > endIdx가 되는 순간 종료해서, Fail/Success/End 헤더 아래에 붙은 본문 로그를 못 읽음. 
+
+즉 현재 상세창은 이렇게 잘림.
+
+Start 헤더
+Fail 헤더
+--- 여기서 종료 ---
+Fail 헤더 밑 본문 / KV / 상세 로그 미표시
+
+아래 메서드 하나만 전체 교체해.
+
+
+---
+
+ReadBlockRange(string file, int startIdx, int endIdx) 전체 교체
+
+private string ReadBlockRange(string file, int startIdx, int endIdx)
+{
+    if (string.IsNullOrWhiteSpace(file))
+        return "";
+
+    if (startIdx < 0)
+        return "";
+
+    string fp = Path.Combine(txtFolder.Text, file);
+
+    if (!File.Exists(fp))
+        return "";
+
+    var sb = new StringBuilder();
+
+    int current = 0;
+
+    bool started = false;
+    bool reachedEndHeader = false;
+
+    using (var fs = new FileStream(
+        fp,
+        FileMode.Open,
+        FileAccess.Read,
+        FileShare.ReadWrite | FileShare.Delete))
+    using (var sr = new StreamReader(fs, Encoding.UTF8, true, 1024 * 64))
+    {
+        string line;
+
+        while ((line = sr.ReadLine()) != null)
+        {
+            if (!started)
+            {
+                if (current < startIdx)
+                {
+                    current++;
+                    continue;
+                }
+
+                started = true;
+            }
+
+            bool isHeader = headRx.IsMatch(line);
+
+            // EndIdx 헤더 이후 다음 헤더를 만나면 종료
+            // 즉, EndIdx 헤더의 본문 라인은 포함한다.
+            if (reachedEndHeader && isHeader && current > endIdx)
+                break;
+
+            sb.AppendLine(line);
+
+            if (endIdx >= 0 && current >= endIdx)
+                reachedEndHeader = true;
+
+            current++;
+        }
+    }
+
+    return sb.ToString();
+}
+
+
+---
+
+이렇게 바뀜.
+
+기존:
+StartIdx ~ EndIdx 라인까지만 표시
+
+수정:
+StartIdx부터 표시
+EndIdx 헤더까지 표시
+EndIdx 헤더 아래 본문까지 표시
+다음 로그 헤더 만나면 종료
+
+이건 메모리 영향 거의 없음.
+상세창 열 때만 파일을 스트리밍으로 다시 읽는 방식이라 지금 경량화 방향하고도 맞음.
