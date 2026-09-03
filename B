@@ -1,96 +1,83 @@
+맞다. 검색 버튼 Click 연결이 빠져 있음.
 
-현재 구조는 ParseFileAsync()에서 LineIndex를 실제 파일 라인 번호로 저장하고 있음. 그래서 라인 번호 자체는 맞음. 
-그런데 BuildMergedQueue()에서 Fail이면 EndIdx = Fail 헤더 라인으로 잡고 있음. 
-문제는 ReadBlockRange()가 current > endIdx가 되는 순간 종료해서, Fail/Success/End 헤더 아래에 붙은 본문 로그를 못 읽음. 
+현재 소스에서 btnSearch는 만들고 화면에도 추가했는데, 이벤트 연결 구간에는 btnSearch.Click += ...가 없음. 대신 btnClear.Click이 두 번 등록되어 있음.  
 
-즉 현재 상세창은 이렇게 잘림.
+수정 위치
 
-Start 헤더
-Fail 헤더
---- 여기서 종료 ---
-Fail 헤더 밑 본문 / KV / 상세 로그 미표시
+MainForm() 생성자 안에서 아래 구간을 찾아.
 
-아래 메서드 하나만 전체 교체해.
-
-
----
-
-ReadBlockRange(string file, int startIdx, int endIdx) 전체 교체
-
-private string ReadBlockRange(string file, int startIdx, int endIdx)
+btnBrowse.Click += (s, e) => { BrowseFolder(); ApplyFilterAndBind(); UpdateDynamicColumnsForSearch(); BuildFileListOnly();  };
+btnList.Click += (s, e) => BuildFileListOnly();
+btnOpen.Click += async (s, e) => await LoadSelectedFileAsync();
+btnClear.Click += (s, e) =>
 {
-    if (string.IsNullOrWhiteSpace(file))
-        return "";
+    activeFilters.Clear();
 
-    if (startIdx < 0)
-        return "";
+    txtSearchVar.Text = _BizS;
+    txtSearchVar.ForeColor = Color.Gray;
 
-    string fp = Path.Combine(txtFolder.Text, file);
+    ApplyFilterAndBind();
+};
 
-    if (!File.Exists(fp))
-        return "";
+btnClear.Click += async (s, e) =>
+{
+    activeFilters.Clear();
 
-    var sb = new StringBuilder();
+    txtSearchVar.Text = _BizS;
+    txtSearchVar.ForeColor = Color.Gray;
 
-    int current = 0;
+    searchMergedRows = null;
 
-    bool started = false;
-    bool reachedEndHeader = false;
+    await ApplyMergedViewAsync(true, true);
+};
 
-    using (var fs = new FileStream(
-        fp,
-        FileMode.Open,
-        FileAccess.Read,
-        FileShare.ReadWrite | FileShare.Delete))
-    using (var sr = new StreamReader(fs, Encoding.UTF8, true, 1024 * 64))
-    {
-        string line;
+위 블록 전체를 아래로 교체
 
-        while ((line = sr.ReadLine()) != null)
-        {
-            if (!started)
-            {
-                if (current < startIdx)
-                {
-                    current++;
-                    continue;
-                }
+btnBrowse.Click += (s, e) =>
+{
+    BrowseFolder();
+    BuildFileListOnly();
+};
 
-                started = true;
-            }
+btnList.Click += (s, e) =>
+{
+    BuildFileListOnly();
+};
 
-            bool isHeader = headRx.IsMatch(line);
+btnOpen.Click += async (s, e) =>
+{
+    await LoadSelectedFileAsync();
+};
 
-            // EndIdx 헤더 이후 다음 헤더를 만나면 종료
-            // 즉, EndIdx 헤더의 본문 라인은 포함한다.
-            if (reachedEndHeader && isHeader && current > endIdx)
-                break;
+btnSearch.Click += async (s, e) =>
+{
+    activeFilters.Clear();
+    searchMergedRows = null;
 
-            sb.AppendLine(line);
+    await ApplyMergedViewAsync(true, true);
+};
 
-            if (endIdx >= 0 && current >= endIdx)
-                reachedEndHeader = true;
+btnClear.Click += async (s, e) =>
+{
+    activeFilters.Clear();
 
-            current++;
-        }
-    }
+    txtSearchVar.Text = _BizS;
+    txtSearchVar.ForeColor = Color.Gray;
 
-    return sb.ToString();
-}
+    searchMergedRows = null;
 
+    await ApplyMergedViewAsync(true, true);
+};
 
----
+이렇게 바꾸면 됨.
 
-이렇게 바뀜.
+검색 버튼:
+검색창 BR 조건 기준으로 ApplyMergedViewAsync(true, true) 실행
 
-기존:
-StartIdx ~ EndIdx 라인까지만 표시
+초기화 버튼:
+검색창 placeholder 복구 + 필터 초기화 + 전체 다시 표시
 
-수정:
-StartIdx부터 표시
-EndIdx 헤더까지 표시
-EndIdx 헤더 아래 본문까지 표시
-다음 로그 헤더 만나면 종료
+중복 btnClear:
+제거됨
 
-이건 메모리 영향 거의 없음.
-상세창 열 때만 파일을 스트리밍으로 다시 읽는 방식이라 지금 경량화 방향하고도 맞음.
+btnBrowse에서 ApplyFilterAndBind()를 뺀 이유는 폴더 선택 시 아직 파일 로드 전인데 필터/동적 컬럼을 다시 계산할 필요가 없어서임.
